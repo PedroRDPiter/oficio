@@ -1,0 +1,8 @@
+Crear cuenta en https://render.com
+Subir esta carpeta a un repositorio GitHub.
+En Render elegir New > Blueprint.
+Seleccionar el repositorio.
+Render detectará [render.yaml](/c:/Users/Planeacion/Documents/MR/apps/oficios/render.yaml).
+Crear el servicio.
+Verificar que tenga disco persistente en /var/data.
+Abrir la URL pública que Render genere.

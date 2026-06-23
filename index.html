@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Control de Oficios</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navegacion principal">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">O</div>
+          <div>
+            <strong>Oficios</strong>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Secciones">
+          <button class="tab is-active" type="button" data-view="inbox">
+            <span aria-hidden="true">IN</span>
+            Recibidos
+          </button>
+          <button class="tab" type="button" data-view="outgoing">
+            <span aria-hidden="true">#</span>
+            Consecutivos
+          </button>
+          <button class="tab" type="button" data-view="directory">
+            <span aria-hidden="true">PE</span>
+            Personal
+          </button>
+        </nav>
+
+        <div class="sync-note" id="syncNote">
+          <strong>Modo local</strong>
+          <span>Los registros se guardan en este equipo. Exporta respaldos desde el panel de datos.</span>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h1>Recepcion y seguimiento de oficios</h1>
+          </div>
+          <div class="top-actions">
+            <button class="icon-button" type="button" id="installBtn" hidden title="Instalar aplicacion" aria-label="Instalar aplicacion">DL</button>
+            <button class="button ghost" type="button" id="exportBtn">Exportar</button>
+            <label class="button ghost file-label">
+              Importar
+              <input id="importInput" type="file" accept="application/json">
+            </label>
+          </div>
+        </header>
+
+        <section class="stats-grid" aria-label="Resumen">
+          <article class="stat-card">
+            <span>Recibidos</span>
+            <strong id="statReceived">0</strong>
+          </article>
+          <article class="stat-card">
+            <span>Pendientes</span>
+            <strong id="statPending">0</strong>
+          </article>
+          <article class="stat-card">
+            <span>Asignados</span>
+            <strong id="statAssigned">0</strong>
+          </article>
+          <article class="stat-card">
+            <span>Consecutivo actual</span>
+            <strong id="statNext">001</strong>
+          </article>
+        </section>
+
+        <section class="view is-active" id="view-inbox">
+          <div class="split-layout">
+            <form class="panel" id="incomingForm">
+              <div class="panel-heading">
+                <h2>Registrar oficio recibido</h2>
+                <span class="badge">Ventanilla</span>
+              </div>
+
+              <div class="field-grid">
+                <label>
+                  Folio recibido
+                  <input name="folio" autocomplete="off" placeholder="Ej. DOP-124/2026" required>
+                </label>
+                <label>
+                  Fecha de recepcion
+                  <input name="receivedAt" type="date" required>
+                </label>
+              </div>
+
+              <label>
+                Remitente
+                <input name="sender" autocomplete="organization" placeholder="Dependencia, ciudadano o empresa" required>
+              </label>
+
+              <label>
+                Asunto
+                <textarea name="subject" rows="3" placeholder="Resumen breve del oficio" required></textarea>
+              </label>
+
+              <div class="field-grid">
+                <label>
+                  Prioridad
+                  <select name="priority">
+                    <option value="Normal">Normal</option>
+                    <option value="Alta">Alta</option>
+                    <option value="Urgente">Urgente</option>
+                  </select>
+                </label>
+                <label>
+                  Estado inicial
+                  <select name="status">
+                    <option value="Pendiente de asignacion">Pendiente de asignacion</option>
+                    <option value="En revision">En revision</option>
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                Escaneo o foto del oficio
+                <input name="document" type="file" accept="image/*,application/pdf" capture="environment">
+              </label>
+
+              <label>
+                Observaciones
+                <textarea name="notes" rows="2" placeholder="Datos de contacto, anexos o instrucciones"></textarea>
+              </label>
+
+              <div class="form-actions">
+                <button class="button primary" type="submit">Registrar y avisar</button>
+                <button class="button" type="reset">Limpiar</button>
+              </div>
+            </form>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Bandeja del director</h2>
+                <div class="filters">
+                  <input id="searchIncoming" type="search" placeholder="Buscar oficio">
+                  <select id="statusFilter" aria-label="Filtrar estado">
+                    <option value="">Todos</option>
+                    <option>Pendiente de asignacion</option>
+                    <option>En revision</option>
+                    <option>Asignado</option>
+                    <option>Respondido</option>
+                  </select>
+                </div>
+              </div>
+              <div class="record-list" id="incomingList" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-outgoing">
+          <div class="split-layout">
+            <form class="panel" id="outgoingForm">
+              <div class="panel-heading">
+                <h2>Generar oficio interno</h2>
+                <span class="badge" id="nextBadge">Siguiente 001</span>
+              </div>
+
+              <div class="field-grid">
+                <label>
+                  Prefijo
+                  <input name="prefix" value="DPDU" maxlength="12" required>
+                </label>
+                <label>
+                  Fecha
+                  <input name="createdAt" type="date" required>
+                </label>
+              </div>
+
+              <label>
+                Destinatario
+                <input name="recipient" placeholder="Nombre o dependencia" required>
+              </label>
+
+              <label>
+                Asunto
+                <textarea name="subject" rows="3" required></textarea>
+              </label>
+
+              <label>
+                Responsable que elabora
+                <select name="author" id="authorSelect"></select>
+              </label>
+
+              <div class="form-actions">
+                <button class="button primary" type="submit">Asignar consecutivo</button>
+              </div>
+            </form>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Oficios generados</h2>
+                <input id="searchOutgoing" type="search" placeholder="Buscar consecutivo">
+              </div>
+              <div class="record-list" id="outgoingList" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="view" id="view-directory">
+          <div class="split-layout compact">
+            <div class="panel-stack">
+              <form class="panel" id="settingsForm">
+                <div class="panel-heading">
+                  <h2>Configuracion</h2>
+                </div>
+                <label>
+                  Correo del director
+                  <input name="directorEmail" type="email" placeholder="director@municipio.gob.mx" required>
+                </label>
+                <div class="form-actions">
+                  <button class="button primary" type="submit">Guardar correo</button>
+                </div>
+              </form>
+
+              <form class="panel" id="personForm">
+                <div class="panel-heading">
+                  <h2>Personal asignable</h2>
+                </div>
+                <label>
+                  Nombre
+                  <input name="name" placeholder="Nombre completo" required>
+                </label>
+                <label>
+                  Area o cargo
+                  <input name="role" placeholder="Ej. Jefe de Licencias" required>
+                </label>
+                <label>
+                  Correo
+                  <input name="email" type="email" placeholder="correo@municipio.gob.mx">
+                </label>
+                <div class="form-actions">
+                  <button class="button primary" type="submit">Agregar persona</button>
+                </div>
+              </form>
+            </div>
+
+            <section class="panel">
+              <div class="panel-heading">
+                <h2>Directorio</h2>
+              </div>
+              <div class="record-list" id="personList"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="assignmentDialog">
+      <form method="dialog" id="assignmentForm" class="dialog-body">
+        <div class="panel-heading">
+          <h2>Asignar respuesta</h2>
+          <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">×</button>
+        </div>
+        <input type="hidden" name="id">
+        <label>
+          Responsable
+          <select name="assignee" required></select>
+        </label>
+        <label>
+          Fecha limite
+          <input name="dueAt" type="date">
+        </label>
+        <label>
+          Instrucciones del director
+          <textarea name="instructions" rows="3" placeholder="Indicar respuesta, revision o tramite"></textarea>
+        </label>
+        <div class="form-actions">
+          <button class="button primary" value="assign" type="submit">Guardar asignacion</button>
+        </div>
+      </form>
+    </dialog>
+
+    <template id="emptyTemplate">
+      <div class="empty-state">
+        <strong>Sin registros</strong>
+        <span>Cuando captures informacion aparecera aqui.</span>
+      </div>
+    </template>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

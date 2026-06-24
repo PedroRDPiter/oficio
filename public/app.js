@@ -13,6 +13,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 let db;
 let apiOnline = false;
 let supabaseOnline = false;
+let supabaseStatus = "not-configured";
 let supabase = null;
 let state = {
   incoming: [],
@@ -38,10 +39,14 @@ function isSupabaseConfigured() {
 }
 
 async function detectSupabase() {
-  if (!isSupabaseConfigured()) return;
+  if (!isSupabaseConfigured()) {
+    supabaseStatus = "not-configured";
+    return;
+  }
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const { error } = await supabase.from("configuracion").select("id").eq("id", "main").limit(1);
   supabaseOnline = !error;
+  supabaseStatus = error ? `error: ${error.message}` : "online";
   if (error) console.warn("Supabase no disponible:", error.message);
 }
 
@@ -75,6 +80,14 @@ function renderConnectionMode() {
   if (!note) return;
   if (supabaseOnline) {
     note.innerHTML = "<strong>Supabase activo</strong><span>Los registros y documentos se guardan en la nube.</span>";
+    return;
+  }
+  if (supabaseStatus === "not-configured") {
+    note.innerHTML = "<strong>Supabase sin configurar</strong><span>Faltan variables de entorno en Netlify o no corrio el build.</span>";
+    return;
+  }
+  if (supabaseStatus.startsWith("error:")) {
+    note.innerHTML = `<strong>Error Supabase</strong><span>${escapeHtml(supabaseStatus.replace("error: ", ""))}</span>`;
     return;
   }
   note.innerHTML = apiOnline
@@ -517,6 +530,27 @@ async function refresh() {
   await loadState();
 }
 
+function showMessage(message, type = "info") {
+  let box = $("#appMessage");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "appMessage";
+    box.className = "app-message";
+    document.body.appendChild(box);
+  }
+  box.textContent = message;
+  box.dataset.type = type;
+  box.hidden = false;
+  clearTimeout(showMessage.timer);
+  showMessage.timer = setTimeout(() => {
+    box.hidden = true;
+  }, 7000);
+}
+
+function describeError(error) {
+  return error?.message || String(error);
+}
+
 function bindTabs() {
   $$(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -532,72 +566,92 @@ function bindForms() {
 
   $("#incomingForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    const documentFile = form.elements.document.files[0];
-    const item = {
-      id: uid(),
-      folio: data.folio.trim(),
-      receivedAt: data.receivedAt,
-      sender: data.sender.trim(),
-      subject: data.subject.trim(),
-      priority: data.priority,
-      status: data.status,
-      notes: data.notes.trim(),
-      document: await fileToRecord(documentFile),
-      createdAt: new Date().toISOString(),
-    };
-    await put("incoming", item);
-    form.reset();
-    form.elements.receivedAt.value = today();
-    await refresh();
-    openDirectorEmail(item);
+    try {
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      const documentFile = form.elements.document.files[0];
+      const item = {
+        id: uid(),
+        folio: data.folio.trim(),
+        receivedAt: data.receivedAt,
+        sender: data.sender.trim(),
+        subject: data.subject.trim(),
+        priority: data.priority,
+        status: data.status,
+        notes: data.notes.trim(),
+        document: await fileToRecord(documentFile),
+        createdAt: new Date().toISOString(),
+      };
+      await put("incoming", item);
+      form.reset();
+      form.elements.receivedAt.value = today();
+      await refresh();
+      showMessage("Oficio guardado correctamente.", "success");
+      openDirectorEmail(item);
+    } catch (error) {
+      showMessage(`No se pudo guardar el oficio: ${describeError(error)}`, "error");
+    }
   });
 
   $("#outgoingForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    const number = state.settings.nextNumber;
-    const year = new Date(`${data.createdAt}T00:00:00`).getFullYear();
-    const item = {
-      id: uid(),
-      number,
-      fullNumber: `${data.prefix.toUpperCase()}-${String(number).padStart(3, "0")}/${year}`,
-      prefix: data.prefix.toUpperCase(),
-      createdAt: data.createdAt,
-      recipient: data.recipient.trim(),
-      subject: data.subject.trim(),
-      author: data.author,
-    };
-    state.settings.nextNumber += 1;
-    await Promise.all([put("outgoing", item), saveSettings()]);
-    form.reset();
-    form.elements.prefix.value = "DPDU";
-    form.elements.createdAt.value = today();
-    await refresh();
+    try {
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      const number = state.settings.nextNumber;
+      const year = new Date(`${data.createdAt}T00:00:00`).getFullYear();
+      const item = {
+        id: uid(),
+        number,
+        fullNumber: `${data.prefix.toUpperCase()}-${String(number).padStart(3, "0")}/${year}`,
+        prefix: data.prefix.toUpperCase(),
+        createdAt: data.createdAt,
+        recipient: data.recipient.trim(),
+        subject: data.subject.trim(),
+        author: data.author,
+      };
+      state.settings.nextNumber += 1;
+      await Promise.all([put("outgoing", item), saveSettings()]);
+      form.reset();
+      form.elements.prefix.value = "DPDU";
+      form.elements.createdAt.value = today();
+      await refresh();
+      showMessage("Consecutivo guardado correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo guardar el consecutivo: ${describeError(error)}`, "error");
+    }
   });
 
   $("#personForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    await put("people", {
-      id: uid(),
-      name: data.name.trim(),
-      role: data.role.trim(),
-      email: data.email.trim(),
-    });
-    form.reset();
-    await refresh();
+    try {
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      await put("people", {
+        id: uid(),
+        name: data.name.trim(),
+        role: data.role.trim(),
+        email: data.email.trim(),
+      });
+      form.reset();
+      await refresh();
+      showMessage("Persona guardada correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo guardar la persona: ${describeError(error)}`, "error");
+    }
   });
 
   $("#settingsForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
-    state.settings.directorEmail = form.elements.directorEmail.value.trim();
-    await saveSettings();
-    await refresh();
+    try {
+      const form = event.currentTarget;
+      state.settings.directorEmail = form.elements.directorEmail.value.trim();
+      await saveSettings();
+      await refresh();
+      showMessage("Configuracion guardada correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo guardar la configuracion: ${describeError(error)}`, "error");
+    }
   });
 
   $("#assignmentForm").addEventListener("submit", async (event) => {

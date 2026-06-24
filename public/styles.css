@@ -410,6 +410,37 @@ dialog::backdrop {
   padding: 18px;
 }
 
+.app-message {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 50;
+  max-width: min(440px, calc(100vw - 24px));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+  font-weight: 700;
+}
+
+.app-message[data-type="success"] {
+  border-color: #80b59c;
+  background: #edf8f1;
+  color: #21543a;
+}
+
+.app-message[data-type="error"] {
+  border-color: #d99a88;
+  background: #fff0ec;
+  color: #8f321f;
+}
+
+.app-message[hidden] {
+  display: none;
+}
+
 @media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -565,6 +596,11 @@ textarea {
 @media (max-width: 960px) {
   body {
     padding-bottom: 74px;
+  }
+
+  .app-message {
+    right: 12px;
+    bottom: 86px;
   }
 
   .sidebar {

@@ -10,6 +10,27 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
+    <section class="auth-screen" id="authScreen" hidden>
+      <form class="panel auth-panel" id="authForm">
+        <div class="brand auth-brand">
+          <div class="brand-mark" aria-hidden="true">O</div>
+          <div>
+            <strong>Control de Oficios</strong>
+            <span>Acceso autorizado</span>
+          </div>
+        </div>
+        <label>
+          Correo
+          <input name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>
+          Contrasena
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="button primary" type="submit">Entrar</button>
+      </form>
+    </section>
+
     <div class="app-shell">
       <aside class="sidebar" aria-label="Navegacion principal">
         <div class="brand">
@@ -48,6 +69,7 @@
           <div class="top-actions">
             <button class="icon-button" type="button" id="installBtn" hidden title="Instalar aplicacion" aria-label="Instalar aplicacion">DL</button>
             <button class="button ghost" type="button" id="exportBtn">Exportar</button>
+            <button class="button ghost" type="button" id="logoutBtn" hidden>Salir</button>
             <label class="button ghost file-label">
               Importar
               <input id="importInput" type="file" accept="application/json">

@@ -9,7 +9,9 @@ const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(PROJECT_ROOT, "data", "oficios-data.json"));
 const DOCUMENTS_DIR = path.resolve(process.env.DOCUMENTS_DIR || path.join(PROJECT_ROOT, "storage", "documentos"));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
+const API_TOKEN = process.env.API_TOKEN || "";
 const STORES = ["incoming", "outgoing", "people", "settings"];
+const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -74,14 +76,21 @@ function storeDocument(record) {
   if (!match) return record;
 
   const type = match[1];
+  if (!ALLOWED_DOCUMENT_TYPES.has(type)) {
+    throw new Error("Tipo de documento no permitido");
+  }
   const base64 = match[2];
+  const buffer = Buffer.from(base64, "base64");
+  if (buffer.length > MAX_UPLOAD_BYTES) {
+    throw new Error("Archivo demasiado grande");
+  }
   const folder = path.join(DOCUMENTS_DIR, String(new Date().getFullYear()));
   fs.mkdirSync(folder, { recursive: true });
 
   const originalName = safeFilename(record.document.name);
   const filename = `${record.id}-${originalName}`;
   const filePath = path.join(folder, filename);
-  fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
+  fs.writeFileSync(filePath, buffer);
 
   return {
     ...record,
@@ -90,7 +99,6 @@ function storeDocument(record) {
       type,
       size: record.document.size,
       url: `/documentos/${new Date().getFullYear()}/${encodeURIComponent(filename)}`,
-      localPath: filePath,
     },
   };
 }
@@ -120,12 +128,23 @@ function readBody(req) {
   });
 }
 
+function isApiAuthorized(req) {
+  if (!API_TOKEN) return true;
+  const authorization = req.headers.authorization || "";
+  return authorization === `Bearer ${API_TOKEN}`;
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const parts = url.pathname.split("/").filter(Boolean);
 
   if (url.pathname === "/api/health") {
-    send(res, 200, JSON.stringify({ ok: true, storage: DOCUMENTS_DIR, dataFile: DATA_FILE }));
+    send(res, 200, JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (!isApiAuthorized(req)) {
+    send(res, 401, JSON.stringify({ error: "No autorizado" }));
     return;
   }
 

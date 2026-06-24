@@ -38,6 +38,25 @@ textarea {
   min-height: 100vh;
 }
 
+.auth-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.auth-screen[hidden] {
+  display: none;
+}
+
+.auth-panel {
+  width: min(420px, 100%);
+}
+
+.auth-brand {
+  margin-bottom: 8px;
+}
+
 .sidebar {
   background: #163f37;
   color: #f7fbf8;

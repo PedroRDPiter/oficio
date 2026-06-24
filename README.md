@@ -71,9 +71,9 @@ Los escaneos se sirven desde `/documentos/...`, pero se guardan fisicamente en `
 Para usar la app sin servidor Node en Netlify:
 
 1. Ejecuta `data/query.sql` en el SQL Editor de Supabase si aun no creaste las tablas.
-2. Ejecuta `data/supabase-paso-6.sql` para habilitar RLS y permisos basicos de prueba.
+2. Ejecuta `data/supabase-produccion.sql` para habilitar autenticacion, RLS, roles y consecutivos seguros.
 3. Crea el bucket `documentos` en Supabase Storage.
-4. Para esta version inicial, marca el bucket `documentos` como publico para que el boton "Ver escaneo" pueda abrir los archivos.
+4. Deja el bucket `documentos` como privado.
 5. En Netlify configura estas variables de entorno:
    - `SUPABASE_URL`
    - `SUPABASE_ANON_KEY`
@@ -81,3 +81,11 @@ Para usar la app sin servidor Node en Netlify:
 6. Netlify ejecutara `node scripts/create-supabase-config.js` y publicara la carpeta `public/`.
 
 Mientras Supabase este configurado, la PWA guarda en la nube. Si no esta configurado, conserva el modo local/servidor como respaldo.
+
+Despues de crear usuarios en Supabase Auth, registra su rol en la tabla `perfiles`.
+Roles admitidos:
+
+- `admin`
+- `director`
+- `ventanilla`
+- `responsable`

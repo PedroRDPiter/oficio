@@ -4,6 +4,8 @@ import { SUPABASE_ANON_KEY, SUPABASE_DOCUMENT_BUCKET, SUPABASE_URL } from "./sup
 const DB_NAME = "oficios-pwa";
 const DB_VERSION = 1;
 const STORES = ["incoming", "outgoing", "people", "settings"];
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => crypto.randomUUID();
@@ -15,6 +17,8 @@ let apiOnline = false;
 let supabaseOnline = false;
 let supabaseStatus = "not-configured";
 let supabase = null;
+let currentUser = null;
+let currentProfile = null;
 let state = {
   incoming: [],
   outgoing: [],
@@ -44,10 +48,27 @@ async function detectSupabase() {
     return;
   }
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data: sessionData } = await supabase.auth.getSession();
+  currentUser = sessionData.session?.user || null;
+  if (!currentUser) {
+    supabaseStatus = "auth-required";
+    return;
+  }
   const { error } = await supabase.from("configuracion").select("id").eq("id", "main").limit(1);
   supabaseOnline = !error;
   supabaseStatus = error ? `error: ${error.message}` : "online";
+  if (supabaseOnline) await loadCurrentProfile();
   if (error) console.warn("Supabase no disponible:", error.message);
+}
+
+async function loadCurrentProfile() {
+  const { data, error } = await supabase
+    .from("perfiles")
+    .select("rol, personal_id")
+    .eq("user_id", currentUser.id)
+    .maybeSingle();
+  if (error) throw error;
+  currentProfile = data || null;
 }
 
 function openDb() {
@@ -86,6 +107,10 @@ function renderConnectionMode() {
     note.innerHTML = "<strong>Supabase sin configurar</strong><span>Faltan variables de entorno en Netlify o no corrio el build.</span>";
     return;
   }
+  if (supabaseStatus === "auth-required") {
+    note.innerHTML = "<strong>Acceso requerido</strong><span>Inicia sesion para usar la nube.</span>";
+    return;
+  }
   if (supabaseStatus.startsWith("error:")) {
     note.innerHTML = `<strong>Error Supabase</strong><span>${escapeHtml(supabaseStatus.replace("error: ", ""))}</span>`;
     return;
@@ -93,6 +118,17 @@ function renderConnectionMode() {
   note.innerHTML = apiOnline
     ? "<strong>Servidor activo</strong><span>Los registros y documentos se guardan en el servidor configurado.</span>"
     : "<strong>Modo local</strong><span>Los registros se guardan en este equipo. Exporta respaldos desde el panel de datos.</span>";
+}
+
+function hasRole(...roles) {
+  if (!supabaseOnline) return true;
+  return roles.includes(currentProfile?.rol);
+}
+
+function requireRole(...roles) {
+  if (!hasRole(...roles)) {
+    throw new Error("No tienes permisos para esta accion.");
+  }
 }
 
 async function apiRequest(path, options = {}) {
@@ -164,7 +200,27 @@ function personToDb(person) {
   };
 }
 
-function incomingToApp(row) {
+async function signedDocument(row) {
+  if (!row.documento_url) return null;
+  if (/^https?:\/\//i.test(row.documento_url)) {
+    return {
+      name: row.documento_nombre || "documento",
+      path: row.documento_url,
+      url: row.documento_url,
+    };
+  }
+  const { data, error } = await supabase.storage
+    .from(SUPABASE_DOCUMENT_BUCKET)
+    .createSignedUrl(row.documento_url, 60 * 10);
+  if (error) throw error;
+  return {
+    name: row.documento_nombre || "documento",
+    path: row.documento_url,
+    url: data.signedUrl,
+  };
+}
+
+async function incomingToApp(row) {
   const person = state.people.find((item) => item.id === row.asignado_a);
   return {
     id: row.id,
@@ -175,10 +231,7 @@ function incomingToApp(row) {
     priority: row.prioridad || "Normal",
     status: row.estado || "Pendiente de asignacion",
     notes: row.observaciones || "",
-    document: row.documento_url ? {
-      name: row.documento_nombre || "documento",
-      url: row.documento_url,
-    } : null,
+    document: await signedDocument(row),
     assignee: person?.name || "",
     assigneeId: row.asignado_a || "",
     dueAt: row.fecha_limite || "",
@@ -198,7 +251,7 @@ async function incomingToDb(item) {
     prioridad: item.priority,
     estado: item.status,
     observaciones: item.notes || null,
-    documento_url: uploadedDocument?.url || item.document?.url || null,
+    documento_url: uploadedDocument?.path || item.document?.path || null,
     documento_nombre: uploadedDocument?.name || item.document?.name || null,
     asignado_a: assigneeId,
     fecha_limite: item.dueAt || null,
@@ -260,6 +313,28 @@ function safeFilename(value) {
     .slice(0, 120) || "documento";
 }
 
+function assertValidDocument(file) {
+  if (!file) return;
+  if (file.size > MAX_DOCUMENT_BYTES) {
+    throw new Error("El documento supera el limite de 10 MB.");
+  }
+  if (!ALLOWED_DOCUMENT_TYPES.has(file.type)) {
+    throw new Error("Solo se permiten PDF, JPG, PNG o WebP.");
+  }
+}
+
+function safeDocumentHref(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(value, window.location.origin);
+    if (["https:", "http:", "blob:"].includes(url.protocol)) return value;
+    if (url.protocol === "data:" && /^data:(application\/pdf|image\/(jpeg|png|webp));/i.test(value)) return value;
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 async function uploadSupabaseDocument(item) {
   if (!item.document?.dataUrl) return item.document || null;
   const response = await fetch(item.document.dataUrl);
@@ -274,10 +349,10 @@ async function uploadSupabaseDocument(item) {
       upsert: true,
     });
   if (error) throw error;
-  const { data } = supabase.storage.from(SUPABASE_DOCUMENT_BUCKET).getPublicUrl(path);
   return {
     name: item.document.name,
-    url: data.publicUrl,
+    path,
+    url: null,
   };
 }
 
@@ -297,7 +372,7 @@ async function supabaseGetAll(store) {
   if (store === "incoming") {
     const { data, error } = await supabase.from(SUPABASE_TABLES.incoming).select("*").order("creado_en", { ascending: false });
     if (error) throw error;
-    return data.map(incomingToApp);
+    return Promise.all(data.map(incomingToApp));
   }
 
   if (store === "outgoing") {
@@ -310,11 +385,33 @@ async function supabaseGetAll(store) {
 }
 
 async function supabasePut(store, value) {
+  if (store === "outgoing") {
+    requireRole("admin", "director", "ventanilla");
+    const authorId = value.authorId || state.people.find((person) => person.name === value.author)?.id || null;
+    const { data, error } = await supabase.rpc("generar_oficio", {
+      p_prefijo: value.prefix,
+      p_fecha: value.createdAt,
+      p_destinatario: value.recipient,
+      p_asunto: value.subject,
+      p_elaboro: authorId,
+    });
+    if (error) throw error;
+    return data;
+  }
+
   let payload = value;
-  if (store === "people") payload = personToDb(value);
-  if (store === "incoming") payload = await incomingToDb(value);
-  if (store === "outgoing") payload = outgoingToDb(value);
-  if (store === "settings") payload = settingsToDb(value);
+  if (store === "people") {
+    requireRole("admin", "director");
+    payload = personToDb(value);
+  }
+  if (store === "incoming") {
+    requireRole("admin", "director", "ventanilla", "responsable");
+    payload = await incomingToDb(value);
+  }
+  if (store === "settings") {
+    requireRole("admin", "director");
+    payload = settingsToDb(value);
+  }
 
   const { data, error } = await supabase
     .from(SUPABASE_TABLES[store])
@@ -326,12 +423,15 @@ async function supabasePut(store, value) {
 }
 
 async function supabaseRemove(store, id) {
+  if (store === "people" || store === "outgoing") requireRole("admin");
+  if (store === "incoming") requireRole("admin", "director");
   const { error } = await supabase.from(SUPABASE_TABLES[store]).delete().eq("id", id);
   if (error) throw error;
 }
 
 function fileToRecord(file) {
   if (!file) return Promise.resolve(null);
+  assertValidDocument(file);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve({
@@ -394,6 +494,22 @@ function render() {
   renderIncoming();
   renderOutgoing();
   fillSelects();
+  renderPermissions();
+}
+
+function renderPermissions() {
+  const canManagePeople = hasRole("admin", "director");
+  const canConfigure = hasRole("admin", "director");
+  const canCreateIncoming = hasRole("admin", "director", "ventanilla");
+  const canCreateOutgoing = hasRole("admin", "director", "ventanilla");
+  const canMoveData = hasRole("admin", "director");
+  $("#personForm").hidden = supabaseOnline && !canManagePeople;
+  $("#settingsForm").hidden = supabaseOnline && !canConfigure;
+  $("#incomingForm").hidden = supabaseOnline && !canCreateIncoming;
+  $("#outgoingForm").hidden = supabaseOnline && !canCreateOutgoing;
+  $("#exportBtn").hidden = supabaseOnline && !canMoveData;
+  const importLabel = $("#importInput")?.closest("label");
+  if (importLabel) importLabel.hidden = supabaseOnline && !canMoveData;
 }
 
 function renderStats() {
@@ -410,11 +526,12 @@ function renderStats() {
 function renderPeople() {
   const list = $("#personList");
   if (!state.people.length) return renderEmpty(list);
+  const canDelete = hasRole("admin");
   list.innerHTML = state.people.map((person) => `
     <article class="record-card">
       <div class="record-title">
         <strong>${escapeHtml(person.name)}</strong>
-        <button class="link-button" type="button" data-delete-person="${person.id}">Eliminar</button>
+        ${canDelete ? `<button class="link-button" type="button" data-delete-person="${person.id}">Eliminar</button>` : ""}
       </div>
       <div class="meta">
         <span>${escapeHtml(person.role)}</span>
@@ -436,6 +553,9 @@ function renderIncoming() {
   if (!rows.length) return renderEmpty(list);
   list.innerHTML = rows.map((item) => {
     const priorityClass = item.priority === "Alta" || item.priority === "Urgente" ? " high" : "";
+    const documentHref = safeDocumentHref(item.document?.url || item.document?.dataUrl);
+    const canAssign = hasRole("admin", "director");
+    const canDelete = hasRole("admin", "director");
     return `
       <article class="record-card">
         <div class="record-main">
@@ -452,11 +572,11 @@ function renderIncoming() {
           </div>
         </div>
         <div class="card-actions">
-          <button class="button" type="button" data-assign="${item.id}">Asignar</button>
+          ${canAssign ? `<button class="button" type="button" data-assign="${item.id}">Asignar</button>` : ""}
           <button class="button" type="button" data-status="${item.id}" data-next-status="Respondido">Marcar respondido</button>
           <button class="button ghost" type="button" data-email="${item.id}">Avisar director</button>
-          ${item.document ? `<a class="button ghost" href="${item.document.url || item.document.dataUrl}" download="${escapeHtml(item.document.name)}">Ver escaneo</a>` : ""}
-          <button class="link-button" type="button" data-delete-incoming="${item.id}">Eliminar</button>
+          ${documentHref ? `<a class="button ghost" href="${escapeHtml(documentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.document.name)}">Ver escaneo</a>` : ""}
+          ${canDelete ? `<button class="link-button" type="button" data-delete-incoming="${item.id}">Eliminar</button>` : ""}
         </div>
       </article>
     `;
@@ -481,7 +601,7 @@ function renderOutgoing() {
       </div>
       <div class="card-actions">
         <button class="button ghost" type="button" data-copy="${item.fullNumber}">Copiar numero</button>
-        <button class="link-button" type="button" data-delete-outgoing="${item.id}">Eliminar</button>
+        ${hasRole("admin") ? `<button class="link-button" type="button" data-delete-outgoing="${item.id}">Eliminar</button>` : ""}
       </div>
     </article>
   `).join("");
@@ -495,7 +615,8 @@ function renderAssignmentDocument(item) {
   const container = $("#assignmentDocument");
   if (!container) return;
   const documentUrl = item.document?.url || item.document?.dataUrl;
-  if (!documentUrl) {
+  const safeHref = safeDocumentHref(documentUrl);
+  if (!safeHref) {
     container.innerHTML = `
       <span>Documento recibido</span>
       <p>Este oficio no tiene escaneo adjunto.</p>
@@ -505,7 +626,7 @@ function renderAssignmentDocument(item) {
   const name = item.document?.name || "Documento recibido";
   container.innerHTML = `
     <span>Documento recibido</span>
-    <a class="button ghost" href="${documentUrl}" target="_blank" rel="noopener" download="${escapeHtml(name)}">Ver documento</a>
+    <a class="button ghost" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener" download="${escapeHtml(name)}">Ver documento</a>
   `;
 }
 
@@ -564,6 +685,54 @@ function showMessage(message, type = "info") {
 
 function describeError(error) {
   return error?.message || String(error);
+}
+
+function showAuthScreen(show) {
+  const authScreen = $("#authScreen");
+  const appShell = $(".app-shell");
+  if (authScreen) authScreen.hidden = !show;
+  if (appShell) appShell.hidden = show;
+  const logoutBtn = $("#logoutBtn");
+  if (logoutBtn) logoutBtn.hidden = show || !supabaseOnline;
+}
+
+function bindAuth() {
+  const authForm = $("#authForm");
+  const logoutBtn = $("#logoutBtn");
+  if (authForm) {
+    authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        if (!supabase) throw new Error("Supabase no esta configurado.");
+        const form = event.currentTarget;
+        const data = Object.fromEntries(new FormData(form));
+        const { data: authData, error } = await supabase.auth.signInWithPassword({
+          email: data.email.trim(),
+          password: data.password,
+        });
+        if (error) throw error;
+        currentUser = authData.user;
+        await detectSupabase();
+        renderConnectionMode();
+        showAuthScreen(false);
+        await loadState();
+        showMessage("Sesion iniciada.", "success");
+      } catch (error) {
+        showMessage(`No se pudo iniciar sesion: ${describeError(error)}`, "error");
+      }
+    });
+  }
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      if (supabase) await supabase.auth.signOut();
+      currentUser = null;
+      currentProfile = null;
+      supabaseOnline = false;
+      supabaseStatus = "auth-required";
+      renderConnectionMode();
+      showAuthScreen(true);
+    });
+  }
 }
 
 function bindTabs() {
@@ -625,8 +794,12 @@ function bindForms() {
         subject: data.subject.trim(),
         author: data.author,
       };
-      state.settings.nextNumber += 1;
-      await Promise.all([put("outgoing", item), saveSettings()]);
+      if (supabaseOnline) {
+        await put("outgoing", item);
+      } else {
+        state.settings.nextNumber += 1;
+        await Promise.all([put("outgoing", item), saveSettings()]);
+      }
       form.reset();
       form.elements.prefix.value = "DPDU";
       form.elements.createdAt.value = today();
@@ -672,16 +845,22 @@ function bindForms() {
   $("#assignmentForm").addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "assign") return;
     event.preventDefault();
-    const dialog = $("#assignmentDialog");
-    const data = Object.fromEntries(new FormData(event.currentTarget));
-    const item = state.incoming.find((row) => row.id === data.id);
-    if (!item) return;
-    item.assignee = data.assignee;
-    item.dueAt = data.dueAt;
-    item.status = "Asignado";
-    await put("incoming", item);
-    dialog.close();
-    await refresh();
+    try {
+      requireRole("admin", "director");
+      const dialog = $("#assignmentDialog");
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      const item = state.incoming.find((row) => row.id === data.id);
+      if (!item) return;
+      item.assignee = data.assignee;
+      item.dueAt = data.dueAt;
+      item.status = "Asignado";
+      await put("incoming", item);
+      dialog.close();
+      await refresh();
+      showMessage("Asignacion guardada correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo guardar la asignacion: ${describeError(error)}`, "error");
+    }
   });
 }
 
@@ -799,7 +978,17 @@ async function init() {
   db = await openDb();
   await detectSupabase();
   await detectApi();
+  bindAuth();
   renderConnectionMode();
+  if (isSupabaseConfigured() && supabaseStatus === "auth-required") {
+    showAuthScreen(true);
+    return;
+  }
+  if (isSupabaseConfigured() && !supabaseOnline) {
+    showAuthScreen(false);
+    throw new Error(supabaseStatus.replace("error: ", "") || "No se pudo conectar a Supabase.");
+  }
+  showAuthScreen(false);
   bindTabs();
   bindForms();
   bindLists();

@@ -110,3 +110,19 @@ LOCAL_DOCUMENT_SERVER_URL=http://10.1.85.9:3344
 Los documentos se guardaran en `storage/documentos/`. Solo podran descargarse si esta computadora esta encendida y accesible desde donde se abra la app.
 
 Para descargar fuera de la red local necesitas VPN o un tunel HTTPS. En ese caso `LOCAL_DOCUMENT_SERVER_URL` y `PUBLIC_BASE_URL` deben usar la URL publica del tunel.
+
+## Autoinicio En Windows
+
+Para que el servidor local arranque cuando prendas la computadora e inicies sesion:
+
+```txt
+scripts/instalar-autoinicio.bat
+```
+
+Esto crea un acceso directo en la carpeta de Inicio de Windows del usuario actual.
+
+Para quitarlo:
+
+```txt
+scripts/quitar-autoinicio.bat
+```

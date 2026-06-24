@@ -1,20 +1,49 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SUPABASE_ANON_KEY, SUPABASE_DOCUMENT_BUCKET, SUPABASE_URL } from "./supabase-config.js";
+
 const DB_NAME = "oficios-pwa";
 const DB_VERSION = 1;
 const STORES = ["incoming", "outgoing", "people", "settings"];
 
 const today = () => new Date().toISOString().slice(0, 10);
-const uid = () => `${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0]}`;
+const uid = () => crypto.randomUUID();
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
 let db;
 let apiOnline = false;
+let supabaseOnline = false;
+let supabase = null;
 let state = {
   incoming: [],
   outgoing: [],
   people: [],
   settings: { nextNumber: 1, directorEmail: "director@municipio.gob.mx" },
 };
+
+const SUPABASE_TABLES = {
+  people: "personal",
+  incoming: "oficios_recibidos",
+  outgoing: "oficios_generados",
+  settings: "configuracion",
+};
+
+function isSupabaseConfigured() {
+  return Boolean(
+    SUPABASE_URL
+    && SUPABASE_ANON_KEY
+    && !SUPABASE_URL.includes("TU_")
+    && !SUPABASE_ANON_KEY.includes("TU_")
+  );
+}
+
+async function detectSupabase() {
+  if (!isSupabaseConfigured()) return;
+  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { error } = await supabase.from("configuracion").select("id").eq("id", "main").limit(1);
+  supabaseOnline = !error;
+  if (error) console.warn("Supabase no disponible:", error.message);
+}
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -44,6 +73,10 @@ async function detectApi() {
 function renderConnectionMode() {
   const note = $("#syncNote");
   if (!note) return;
+  if (supabaseOnline) {
+    note.innerHTML = "<strong>Supabase activo</strong><span>Los registros y documentos se guardan en la nube.</span>";
+    return;
+  }
   note.innerHTML = apiOnline
     ? "<strong>Servidor activo</strong><span>Los registros y documentos se guardan en el servidor configurado.</span>"
     : "<strong>Modo local</strong><span>Los registros se guardan en este equipo. Exporta respaldos desde el panel de datos.</span>";
@@ -64,6 +97,7 @@ function tx(store, mode = "readonly") {
 }
 
 function getAll(store) {
+  if (supabaseOnline) return supabaseGetAll(store);
   if (apiOnline) return apiRequest(`/api/${store}`);
   return new Promise((resolve, reject) => {
     const request = tx(store).getAll();
@@ -73,6 +107,7 @@ function getAll(store) {
 }
 
 function put(store, value) {
+  if (supabaseOnline) return supabasePut(store, value);
   if (apiOnline) {
     return apiRequest(`/api/${store}/${encodeURIComponent(value.id)}`, {
       method: "PUT",
@@ -87,6 +122,7 @@ function put(store, value) {
 }
 
 function remove(store, id) {
+  if (supabaseOnline) return supabaseRemove(store, id);
   if (apiOnline) {
     return apiRequest(`/api/${store}/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
@@ -95,6 +131,192 @@ function remove(store, id) {
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+}
+
+function personToApp(row) {
+  return {
+    id: row.id,
+    name: row.nombre,
+    role: row.cargo,
+    email: row.correo || "",
+  };
+}
+
+function personToDb(person) {
+  return {
+    id: person.id,
+    nombre: person.name,
+    cargo: person.role,
+    correo: person.email || null,
+  };
+}
+
+function incomingToApp(row) {
+  const person = state.people.find((item) => item.id === row.asignado_a);
+  return {
+    id: row.id,
+    folio: row.folio,
+    receivedAt: row.fecha_recepcion,
+    sender: row.remitente,
+    subject: row.asunto,
+    priority: row.prioridad || "Normal",
+    status: row.estado || "Pendiente de asignacion",
+    notes: row.observaciones || "",
+    document: row.documento_url ? {
+      name: row.documento_nombre || "documento",
+      url: row.documento_url,
+    } : null,
+    assignee: person?.name || "",
+    assigneeId: row.asignado_a || "",
+    dueAt: row.fecha_limite || "",
+    instructions: row.instrucciones || "",
+    createdAt: row.creado_en || new Date().toISOString(),
+  };
+}
+
+async function incomingToDb(item) {
+  const uploadedDocument = await uploadSupabaseDocument(item);
+  const assigneeId = item.assigneeId || state.people.find((person) => person.name === item.assignee)?.id || null;
+  return {
+    id: item.id,
+    folio: item.folio,
+    fecha_recepcion: item.receivedAt,
+    remitente: item.sender,
+    asunto: item.subject,
+    prioridad: item.priority,
+    estado: item.status,
+    observaciones: item.notes || null,
+    documento_url: uploadedDocument?.url || item.document?.url || null,
+    documento_nombre: uploadedDocument?.name || item.document?.name || null,
+    asignado_a: assigneeId,
+    fecha_limite: item.dueAt || null,
+    instrucciones: item.instructions || null,
+    creado_en: item.createdAt || new Date().toISOString(),
+  };
+}
+
+function outgoingToApp(row) {
+  const person = state.people.find((item) => item.id === row.elaboro);
+  return {
+    id: row.id,
+    number: row.numero,
+    fullNumber: row.numero_completo,
+    prefix: row.prefijo,
+    createdAt: row.fecha,
+    recipient: row.destinatario,
+    subject: row.asunto,
+    author: person?.name || "",
+    authorId: row.elaboro || "",
+  };
+}
+
+function outgoingToDb(item) {
+  const authorId = item.authorId || state.people.find((person) => person.name === item.author)?.id || null;
+  return {
+    id: item.id,
+    numero: item.number,
+    numero_completo: item.fullNumber,
+    prefijo: item.prefix,
+    fecha: item.createdAt,
+    destinatario: item.recipient,
+    asunto: item.subject,
+    elaboro: authorId,
+  };
+}
+
+function settingsToApp(row) {
+  return {
+    id: row.id,
+    nextNumber: row.siguiente_numero,
+    directorEmail: row.correo_director,
+  };
+}
+
+function settingsToDb(settings) {
+  return {
+    id: settings.id || "main",
+    siguiente_numero: settings.nextNumber,
+    correo_director: settings.directorEmail,
+  };
+}
+
+function safeFilename(value) {
+  return String(value || "documento")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120) || "documento";
+}
+
+async function uploadSupabaseDocument(item) {
+  if (!item.document?.dataUrl) return item.document || null;
+  const response = await fetch(item.document.dataUrl);
+  const blob = await response.blob();
+  const year = new Date().getFullYear();
+  const filename = `${item.id}-${safeFilename(item.document.name)}`;
+  const path = `${year}/${filename}`;
+  const { error } = await supabase.storage
+    .from(SUPABASE_DOCUMENT_BUCKET)
+    .upload(path, blob, {
+      contentType: item.document.type || blob.type || "application/octet-stream",
+      upsert: true,
+    });
+  if (error) throw error;
+  const { data } = supabase.storage.from(SUPABASE_DOCUMENT_BUCKET).getPublicUrl(path);
+  return {
+    name: item.document.name,
+    url: data.publicUrl,
+  };
+}
+
+async function supabaseGetAll(store) {
+  if (store === "settings") {
+    const { data, error } = await supabase.from(SUPABASE_TABLES.settings).select("*");
+    if (error) throw error;
+    return data.map(settingsToApp);
+  }
+
+  if (store === "people") {
+    const { data, error } = await supabase.from(SUPABASE_TABLES.people).select("*").order("nombre");
+    if (error) throw error;
+    return data.map(personToApp);
+  }
+
+  if (store === "incoming") {
+    const { data, error } = await supabase.from(SUPABASE_TABLES.incoming).select("*").order("creado_en", { ascending: false });
+    if (error) throw error;
+    return data.map(incomingToApp);
+  }
+
+  if (store === "outgoing") {
+    const { data, error } = await supabase.from(SUPABASE_TABLES.outgoing).select("*").order("numero", { ascending: false });
+    if (error) throw error;
+    return data.map(outgoingToApp);
+  }
+
+  return [];
+}
+
+async function supabasePut(store, value) {
+  let payload = value;
+  if (store === "people") payload = personToDb(value);
+  if (store === "incoming") payload = await incomingToDb(value);
+  if (store === "outgoing") payload = outgoingToDb(value);
+  if (store === "settings") payload = settingsToDb(value);
+
+  const { data, error } = await supabase
+    .from(SUPABASE_TABLES[store])
+    .upsert(payload)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function supabaseRemove(store, id) {
+  const { error } = await supabase.from(SUPABASE_TABLES[store]).delete().eq("id", id);
+  if (error) throw error;
 }
 
 function fileToRecord(file) {
@@ -127,20 +349,22 @@ function normalize(value = "") {
 }
 
 async function loadState() {
-  const [incoming, outgoing, people, settingsRows] = await Promise.all([
-    getAll("incoming"),
-    getAll("outgoing"),
+  const [people, settingsRows] = await Promise.all([
     getAll("people"),
     getAll("settings"),
   ]);
-  state.incoming = incoming.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  state.outgoing = outgoing.sort((a, b) => b.number - a.number);
   state.people = people.sort((a, b) => a.name.localeCompare(b.name));
   state.settings = settingsRows.find((row) => row.id === "main") || state.settings;
   if (!state.people.length) {
     await seedPeople();
     state.people = await getAll("people");
   }
+  const [incoming, outgoing] = await Promise.all([
+    getAll("incoming"),
+    getAll("outgoing"),
+  ]);
+  state.incoming = incoming.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  state.outgoing = outgoing.sort((a, b) => b.number - a.number);
   render();
 }
 
@@ -505,6 +729,7 @@ function bindInstallPrompt() {
 
 async function init() {
   db = await openDb();
+  await detectSupabase();
   await detectApi();
   renderConnectionMode();
   bindTabs();

@@ -1,0 +1,4 @@
+[build]
+  base = "."
+  command = "node scripts/create-supabase-config.js"
+  publish = "public"

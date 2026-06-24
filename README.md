@@ -65,3 +65,19 @@ Variables recomendadas:
 - `MAX_UPLOAD_BYTES=26214400`
 
 Los escaneos se sirven desde `/documentos/...`, pero se guardan fisicamente en `DOCUMENTS_DIR`.
+
+## Supabase + Netlify
+
+Para usar la app sin servidor Node en Netlify:
+
+1. Ejecuta `data/query.sql` en el SQL Editor de Supabase si aun no creaste las tablas.
+2. Ejecuta `data/supabase-paso-6.sql` para habilitar RLS y permisos basicos de prueba.
+3. Crea el bucket `documentos` en Supabase Storage.
+4. Para esta version inicial, marca el bucket `documentos` como publico para que el boton "Ver escaneo" pueda abrir los archivos.
+5. En Netlify configura estas variables de entorno:
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
+   - `SUPABASE_DOCUMENT_BUCKET`
+6. Netlify ejecutara `node scripts/create-supabase-config.js` y publicara la carpeta `public/`.
+
+Mientras Supabase este configurado, la PWA guarda en la nube. Si no esta configurado, conserva el modo local/servidor como respaldo.

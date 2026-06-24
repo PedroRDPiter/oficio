@@ -4,5 +4,7 @@ node_modules/
 npm-debug.log*
 oficios-data.json
 documentos/
+data/oficios-data.json
+storage/documentos/
 .DS_Store
 Thumbs.db

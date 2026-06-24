@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "PWA para recepcion, asignacion y consecutivos de oficios.",
-  "main": "server.js",
+  "main": "src/server/server.js",
   "scripts": {
-    "start": "node server.js",
-    "check": "node --check server.js && node --check app.js && node --check sw.js"
+    "start": "node src/server/server.js",
+    "check": "node --check src/server/server.js && node --check public/app.js && node --check public/sw.js"
   },
   "engines": {
     "node": ">=18"

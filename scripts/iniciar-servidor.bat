@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0.."
 set PORT=3344
 set HOST=0.0.0.0
 echo Iniciando Control de Oficios...
@@ -12,5 +12,5 @@ echo   http://10.1.85.9:%PORT%/
 echo.
 echo No cerrar ventana.
 echo.
-node server.js
+node src\server\server.js
 pause

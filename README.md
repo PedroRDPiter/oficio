@@ -2,20 +2,39 @@
 
 PWA para recibir oficios, adjuntar escaneos, avisar al director, asignar responsables y controlar numeros consecutivos.
 
+## Estructura
+
+```txt
+public/                 Archivos de la PWA servidos al navegador
+  index.html
+  app.js
+  styles.css
+  manifest.webmanifest
+  sw.js
+  icon.svg
+src/server/             Servidor Node.js y API
+  server.js
+data/                   Base local JSON
+  oficios-data.json
+storage/documentos/     Escaneos y PDFs subidos
+scripts/                Utilidades para Windows
+  iniciar-servidor.bat
+```
+
 ## Ejecutar local
 
 ```bash
 npm start
 ```
 
-Tambien puedes usar `iniciar-servidor.bat` en Windows.
+Tambien puedes usar `scripts/iniciar-servidor.bat` en Windows.
 
 ## Variables de entorno
 
 - `PORT`: puerto del servidor. En nube normalmente lo define el proveedor.
 - `HOST`: usa `0.0.0.0` para aceptar conexiones externas.
-- `DATA_FILE`: ruta del archivo JSON de datos.
-- `DOCUMENTS_DIR`: carpeta donde se guardan los documentos escaneados.
+- `DATA_FILE`: ruta del archivo JSON de datos. Por defecto `data/oficios-data.json`.
+- `DOCUMENTS_DIR`: carpeta donde se guardan los documentos escaneados. Por defecto `storage/documentos`.
 - `MAX_UPLOAD_BYTES`: limite de subida. Por defecto 25 MB.
 
 ## Nube

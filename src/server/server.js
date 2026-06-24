@@ -4,9 +4,10 @@ const path = require("path");
 
 const PORT = Number(process.env.PORT || 4174);
 const HOST = process.env.HOST || "0.0.0.0";
-const ROOT = __dirname;
-const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(ROOT, "oficios-data.json"));
-const DOCUMENTS_DIR = path.resolve(process.env.DOCUMENTS_DIR || path.join(ROOT, "documentos"));
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
+const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
+const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(PROJECT_ROOT, "data", "oficios-data.json"));
+const DOCUMENTS_DIR = path.resolve(process.env.DOCUMENTS_DIR || path.join(PROJECT_ROOT, "storage", "documentos"));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
 const STORES = ["incoming", "outgoing", "people", "settings"];
 
@@ -167,9 +168,9 @@ function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const requestedPath = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
   const safePath = path.normalize(requestedPath).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(ROOT, safePath);
+  const filePath = path.join(PUBLIC_DIR, safePath);
 
-  if (!isInside(ROOT, filePath) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+  if (!isInside(PUBLIC_DIR, filePath) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     send(res, 404, "No encontrado", "text/plain; charset=utf-8");
     return;
   }

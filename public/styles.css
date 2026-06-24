@@ -410,6 +410,27 @@ dialog::backdrop {
   padding: 18px;
 }
 
+.assignment-document {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.assignment-document span {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.assignment-document p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .app-message {
   position: fixed;
   right: 18px;
@@ -598,6 +619,19 @@ textarea {
     padding-bottom: 74px;
   }
 
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100vw;
+  }
+
+  .workspace {
+    grid-column: 1;
+    width: 100%;
+    max-width: 100vw;
+    margin-inline: auto;
+  }
+
   .app-message {
     right: 12px;
     bottom: 86px;
@@ -736,5 +770,286 @@ textarea {
 
   .tab {
     font-size: 0.76rem;
+  }
+}
+
+/* Phone viewport refinements */
+html,
+body {
+  min-width: 320px;
+}
+
+.app-shell,
+.workspace,
+.view,
+.split-layout,
+.panel,
+.record-list,
+.record-card {
+  width: 100%;
+  max-width: 100%;
+}
+
+input,
+select,
+textarea,
+button {
+  max-width: 100%;
+}
+
+main,
+section,
+form,
+article,
+header,
+aside,
+nav {
+  max-width: 100%;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    gap: 12px;
+  }
+
+  .top-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .top-actions .icon-button,
+  .top-actions .button,
+  .top-actions .file-label {
+    min-height: 44px;
+  }
+
+  .panel-heading {
+    gap: 10px;
+  }
+
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .record-card {
+    padding: 12px;
+  }
+
+  .record-title {
+    gap: 8px;
+  }
+
+  .pill,
+  .badge {
+    width: fit-content;
+  }
+
+  dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 28px);
+    overflow: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  body {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  .app-shell {
+    display: block;
+  }
+
+  .workspace {
+    padding: 10px 10px calc(14px + env(safe-area-inset-bottom));
+    margin: 0 auto;
+    overflow-x: hidden;
+  }
+
+  .topbar {
+    gap: 10px;
+  }
+
+  h1 {
+    font-size: 1.25rem;
+    line-height: 1.18;
+  }
+
+  h2 {
+    font-size: 1rem;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stat-card {
+    min-height: 76px;
+  }
+
+  .stat-card span {
+    font-size: 0.76rem;
+    line-height: 1.2;
+  }
+
+  .stat-card strong {
+    font-size: 1.28rem;
+  }
+
+  .panel {
+    padding: 12px;
+    box-shadow: 0 8px 24px rgba(24, 33, 31, 0.08);
+  }
+
+  .panel-heading {
+    margin-bottom: 12px;
+  }
+
+  form {
+    gap: 12px;
+  }
+
+  label {
+    font-size: 0.82rem;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+    padding: 10px;
+  }
+
+  textarea {
+    min-height: 88px;
+  }
+
+  .button,
+  .icon-button,
+  .file-label {
+    min-height: 44px;
+    padding-inline: 10px;
+  }
+
+  .sidebar {
+    padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  }
+
+  .tabs {
+    gap: 5px;
+  }
+
+  .tab {
+    min-height: 52px;
+    border-radius: 8px;
+    line-height: 1.1;
+  }
+
+  .record-list {
+    gap: 8px;
+  }
+
+  .card-actions {
+    gap: 7px;
+  }
+
+  .link-button {
+    min-height: 36px;
+    text-align: left;
+  }
+
+  .app-message {
+    left: 10px;
+    right: 10px;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    max-width: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .workspace {
+    padding-inline: 8px;
+  }
+
+  h1 {
+    font-size: 1.14rem;
+  }
+
+  .stats-grid {
+    gap: 7px;
+  }
+
+  .stat-card {
+    padding: 10px;
+  }
+
+  .top-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .tab {
+    font-size: 0.7rem;
+    padding-inline: 3px;
+  }
+
+  .tab span {
+    font-size: 0.68rem;
+  }
+}
+
+@media (max-width: 340px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) and (orientation: landscape) {
+  body {
+    padding-bottom: 0;
+  }
+
+  .app-shell {
+    grid-template-columns: 156px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: sticky;
+    inset: auto;
+    top: 0;
+    height: 100dvh;
+    padding: 10px;
+    display: flex;
+  }
+
+  .brand {
+    display: flex;
+  }
+
+  .brand-mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  .tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .tab {
+    min-height: 42px;
+    flex-direction: row;
+    justify-content: flex-start;
+    text-align: left;
+    font-size: 0.78rem;
+  }
+
+  .workspace {
+    padding: 12px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .app-message {
+    bottom: 12px;
   }
 }

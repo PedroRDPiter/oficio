@@ -2,7 +2,7 @@
 <html lang="es">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Control de Oficios</title>
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -269,10 +269,10 @@
           Fecha limite
           <input name="dueAt" type="date">
         </label>
-        <label>
-          Instrucciones del director
-          <textarea name="instructions" rows="3" placeholder="Indicar respuesta, revision o tramite"></textarea>
-        </label>
+        <div class="assignment-document" id="assignmentDocument">
+          <span>Documento recibido</span>
+          <p>Este oficio no tiene escaneo adjunto.</p>
+        </div>
         <div class="form-actions">
           <button class="button primary" value="assign" type="submit">Guardar asignacion</button>
         </div>

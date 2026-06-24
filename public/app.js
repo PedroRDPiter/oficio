@@ -182,7 +182,6 @@ function incomingToApp(row) {
     assignee: person?.name || "",
     assigneeId: row.asignado_a || "",
     dueAt: row.fecha_limite || "",
-    instructions: row.instrucciones || "",
     createdAt: row.creado_en || new Date().toISOString(),
   };
 }
@@ -203,7 +202,6 @@ async function incomingToDb(item) {
     documento_nombre: uploadedDocument?.name || item.document?.name || null,
     asignado_a: assigneeId,
     fecha_limite: item.dueAt || null,
-    instrucciones: item.instructions || null,
     creado_en: item.createdAt || new Date().toISOString(),
   };
 }
@@ -452,7 +450,6 @@ function renderIncoming() {
             ${item.assignee ? `<span>Asignado a: ${escapeHtml(item.assignee)}</span>` : ""}
             ${item.dueAt ? `<span>Limite: ${escapeHtml(item.dueAt)}</span>` : ""}
           </div>
-          ${item.instructions ? `<p>${escapeHtml(item.instructions)}</p>` : ""}
         </div>
         <div class="card-actions">
           <button class="button" type="button" data-assign="${item.id}">Asignar</button>
@@ -492,6 +489,24 @@ function renderOutgoing() {
 
 function renderEmpty(list) {
   list.innerHTML = $("#emptyTemplate").innerHTML;
+}
+
+function renderAssignmentDocument(item) {
+  const container = $("#assignmentDocument");
+  if (!container) return;
+  const documentUrl = item.document?.url || item.document?.dataUrl;
+  if (!documentUrl) {
+    container.innerHTML = `
+      <span>Documento recibido</span>
+      <p>Este oficio no tiene escaneo adjunto.</p>
+    `;
+    return;
+  }
+  const name = item.document?.name || "Documento recibido";
+  container.innerHTML = `
+    <span>Documento recibido</span>
+    <a class="button ghost" href="${documentUrl}" target="_blank" rel="noopener" download="${escapeHtml(name)}">Ver documento</a>
+  `;
 }
 
 function fillSelects() {
@@ -663,7 +678,6 @@ function bindForms() {
     if (!item) return;
     item.assignee = data.assignee;
     item.dueAt = data.dueAt;
-    item.instructions = data.instructions.trim();
     item.status = "Asignado";
     await put("incoming", item);
     dialog.close();
@@ -684,7 +698,7 @@ function bindLists() {
       form.elements.id.value = item.id;
       form.elements.assignee.value = item.assignee || state.people[0]?.name || "";
       form.elements.dueAt.value = item.dueAt || "";
-      form.elements.instructions.value = item.instructions || "";
+      renderAssignmentDocument(item);
       $("#assignmentDialog").showModal();
       return;
     }

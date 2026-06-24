@@ -11,13 +11,18 @@
   </head>
   <body>
     <section class="auth-screen" id="authScreen" hidden>
+      <canvas class="particle-canvas" id="particleCanvas" aria-hidden="true"></canvas>
       <form class="panel auth-panel" id="authForm">
         <div class="brand auth-brand">
           <div class="brand-mark" aria-hidden="true">O</div>
           <div>
             <strong>Control de Oficios</strong>
-            <span>Acceso autorizado</span>
+            <span>Direccion de Planeacion y Desarrollo Urbano</span>
           </div>
+        </div>
+        <div class="auth-copy">
+          <h1>Acceso seguro</h1>
+          <p>Ingresa con tu cuenta autorizada para consultar, registrar o asignar oficios.</p>
         </div>
         <label>
           Correo
@@ -297,6 +302,31 @@
         </div>
         <div class="form-actions">
           <button class="button primary" value="assign" type="submit">Guardar asignacion</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="responseDialog">
+      <form method="dialog" id="responseForm" class="dialog-body">
+        <div class="panel-heading">
+          <h2>Respuesta del oficio</h2>
+          <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">x</button>
+        </div>
+        <input type="hidden" name="id">
+        <label>
+          Fecha de respuesta
+          <input name="responseAt" type="date" required>
+        </label>
+        <label>
+          Respuesta
+          <textarea name="responseText" rows="4" placeholder="Captura la respuesta o resumen de atencion" required></textarea>
+        </label>
+        <label>
+          Documento de respuesta
+          <input name="responseDocument" type="file" accept="image/*,application/pdf">
+        </label>
+        <div class="form-actions">
+          <button class="button primary" value="save-response" type="submit">Guardar respuesta</button>
         </div>
       </form>
     </dialog>

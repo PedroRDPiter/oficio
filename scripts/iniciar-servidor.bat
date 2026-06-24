@@ -2,6 +2,8 @@
 cd /d "%~dp0.."
 set PORT=3344
 set HOST=0.0.0.0
+set PUBLIC_BASE_URL=http://10.1.85.9:%PORT%
+set ALLOWED_ORIGIN=*
 echo Iniciando Control de Oficios...
 echo.
 echo En este equipo:

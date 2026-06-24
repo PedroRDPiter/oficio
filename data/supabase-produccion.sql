@@ -9,6 +9,12 @@ create table if not exists perfiles (
   creado_en timestamptz default now()
 );
 
+alter table oficios_recibidos
+add column if not exists respuesta text,
+add column if not exists fecha_respuesta date,
+add column if not exists respuesta_documento_url text,
+add column if not exists respuesta_documento_nombre text;
+
 alter table perfiles enable row level security;
 alter table personal enable row level security;
 alter table oficios_recibidos enable row level security;

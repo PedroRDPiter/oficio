@@ -10,6 +10,8 @@ const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(PROJECT_ROOT, 
 const DOCUMENTS_DIR = path.resolve(process.env.DOCUMENTS_DIR || path.join(PROJECT_ROOT, "storage", "documentos"));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
 const API_TOKEN = process.env.API_TOKEN || "";
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
 const STORES = ["incoming", "outgoing", "people", "settings"];
 const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 
@@ -71,10 +73,22 @@ function safeFilename(value) {
 
 function storeDocument(record) {
   if (!record.document?.dataUrl) return record;
+  const stored = saveDocumentFile({
+    document: record.document,
+    ownerId: record.id,
+    folderName: "recibidos",
+  });
 
-  const match = /^data:([^;]+);base64,(.+)$/.exec(record.document.dataUrl);
-  if (!match) return record;
+  return {
+    ...record,
+    document: stored,
+  };
+}
 
+function saveDocumentFile({ document, ownerId, folderName }) {
+  if (!document?.dataUrl) throw new Error("Documento invalido");
+  const match = /^data:([^;]+);base64,(.+)$/.exec(document.dataUrl);
+  if (!match) throw new Error("Documento invalido");
   const type = match[1];
   if (!ALLOWED_DOCUMENT_TYPES.has(type)) {
     throw new Error("Tipo de documento no permitido");
@@ -84,22 +98,23 @@ function storeDocument(record) {
   if (buffer.length > MAX_UPLOAD_BYTES) {
     throw new Error("Archivo demasiado grande");
   }
-  const folder = path.join(DOCUMENTS_DIR, String(new Date().getFullYear()));
+  const year = String(new Date().getFullYear());
+  const safeFolder = safeFilename(folderName || "documentos");
+  const folder = path.join(DOCUMENTS_DIR, safeFolder, year);
   fs.mkdirSync(folder, { recursive: true });
 
-  const originalName = safeFilename(record.document.name);
-  const filename = `${record.id}-${originalName}`;
+  const originalName = safeFilename(document.name);
+  const filename = `${safeFilename(ownerId)}-${originalName}`;
   const filePath = path.join(folder, filename);
   fs.writeFileSync(filePath, buffer);
+  const publicPath = `/documentos/${encodeURIComponent(safeFolder)}/${year}/${encodeURIComponent(filename)}`;
 
   return {
-    ...record,
-    document: {
-      name: record.document.name,
-      type,
-      size: record.document.size,
-      url: `/documentos/${new Date().getFullYear()}/${encodeURIComponent(filename)}`,
-    },
+    name: document.name,
+    type,
+    size: document.size,
+    path: publicPath,
+    url: `${PUBLIC_BASE_URL}${publicPath}`,
   };
 }
 
@@ -109,6 +124,9 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
   });
   res.end(body);
 }
@@ -138,6 +156,11 @@ async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const parts = url.pathname.split("/").filter(Boolean);
 
+  if (req.method === "OPTIONS") {
+    send(res, 204, "");
+    return;
+  }
+
   if (url.pathname === "/api/health") {
     send(res, 200, JSON.stringify({ ok: true }));
     return;
@@ -145,6 +168,14 @@ async function handleApi(req, res) {
 
   if (!isApiAuthorized(req)) {
     send(res, 401, JSON.stringify({ error: "No autorizado" }));
+    return;
+  }
+
+  if (url.pathname === "/api/documents" && req.method === "POST") {
+    const payload = JSON.parse(await readBody(req));
+    const stored = saveDocumentFile(payload);
+    if (!PUBLIC_BASE_URL) stored.url = `${url.origin}${stored.path}`;
+    send(res, 200, JSON.stringify(stored));
     return;
   }
 

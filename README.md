@@ -36,6 +36,8 @@ Tambien puedes usar `scripts/iniciar-servidor.bat` en Windows.
 - `DATA_FILE`: ruta del archivo JSON de datos. Por defecto `data/oficios-data.json`.
 - `DOCUMENTS_DIR`: carpeta donde se guardan los documentos escaneados. Por defecto `storage/documentos`.
 - `MAX_UPLOAD_BYTES`: limite de subida. Por defecto 25 MB.
+- `PUBLIC_BASE_URL`: URL desde donde otros equipos descargan documentos del servidor local.
+- `ALLOWED_ORIGIN`: origen permitido para subir documentos desde Netlify. Puede ser tu URL `https://sitio.netlify.app`.
 
 ## Nube
 
@@ -77,7 +79,8 @@ Para usar la app sin servidor Node en Netlify:
 5. En Netlify configura estas variables de entorno:
    - `SUPABASE_URL`
    - `SUPABASE_ANON_KEY`
-   - `SUPABASE_DOCUMENT_BUCKET`
+- `SUPABASE_DOCUMENT_BUCKET`
+   - `LOCAL_DOCUMENT_SERVER_URL`
 6. Netlify ejecutara `node scripts/create-supabase-config.js` y publicara la carpeta `public/`.
 
 Mientras Supabase este configurado, la PWA guarda en la nube. Si no esta configurado, conserva el modo local/servidor como respaldo.
@@ -89,3 +92,21 @@ Roles admitidos:
 - `director`
 - `ventanilla`
 - `responsable`
+
+## Documentos En Equipo Local
+
+Si quieres que Netlify/Supabase guarden solo datos y que los documentos se guarden en esta computadora:
+
+1. Ejecuta `scripts/iniciar-servidor.bat`.
+2. Asegurate de que la computadora tenga IP fija o reservada.
+3. En Netlify agrega:
+
+```txt
+LOCAL_DOCUMENT_SERVER_URL=http://10.1.85.9:3344
+```
+
+4. Haz `Clear cache and deploy site`.
+
+Los documentos se guardaran en `storage/documentos/`. Solo podran descargarse si esta computadora esta encendida y accesible desde donde se abra la app.
+
+Para descargar fuera de la red local necesitas VPN o un tunel HTTPS. En ese caso `LOCAL_DOCUMENT_SERVER_URL` y `PUBLIC_BASE_URL` deben usar la URL publica del tunel.

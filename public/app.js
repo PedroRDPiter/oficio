@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_ANON_KEY, SUPABASE_DOCUMENT_BUCKET, SUPABASE_URL } from "./supabase-config.js";
+import { LOCAL_DOCUMENT_SERVER_URL, SUPABASE_ANON_KEY, SUPABASE_DOCUMENT_BUCKET, SUPABASE_URL } from "./supabase-config.js";
 
 const DB_NAME = "oficios-pwa";
 const DB_VERSION = 1;
@@ -19,6 +19,7 @@ let supabaseStatus = "not-configured";
 let supabase = null;
 let currentUser = null;
 let currentProfile = null;
+let particleCleanup = null;
 let state = {
   incoming: [],
   outgoing: [],
@@ -200,22 +201,22 @@ function personToDb(person) {
   };
 }
 
-async function signedDocument(row) {
-  if (!row.documento_url) return null;
-  if (/^https?:\/\//i.test(row.documento_url)) {
+async function signedStorageDocument(pathValue, nameValue) {
+  if (!pathValue) return null;
+  if (/^https?:\/\//i.test(pathValue)) {
     return {
-      name: row.documento_nombre || "documento",
-      path: row.documento_url,
-      url: row.documento_url,
+      name: nameValue || "documento",
+      path: pathValue,
+      url: pathValue,
     };
   }
   const { data, error } = await supabase.storage
     .from(SUPABASE_DOCUMENT_BUCKET)
-    .createSignedUrl(row.documento_url, 60 * 10);
+    .createSignedUrl(pathValue, 60 * 10);
   if (error) throw error;
   return {
-    name: row.documento_nombre || "documento",
-    path: row.documento_url,
+    name: nameValue || "documento",
+    path: pathValue,
     url: data.signedUrl,
   };
 }
@@ -231,7 +232,10 @@ async function incomingToApp(row) {
     priority: row.prioridad || "Normal",
     status: row.estado || "Pendiente de asignacion",
     notes: row.observaciones || "",
-    document: await signedDocument(row),
+    document: await signedStorageDocument(row.documento_url, row.documento_nombre),
+    responseText: row.respuesta || "",
+    responseAt: row.fecha_respuesta || "",
+    responseDocument: await signedStorageDocument(row.respuesta_documento_url, row.respuesta_documento_nombre),
     assignee: person?.name || "",
     assigneeId: row.asignado_a || "",
     dueAt: row.fecha_limite || "",
@@ -240,7 +244,8 @@ async function incomingToApp(row) {
 }
 
 async function incomingToDb(item) {
-  const uploadedDocument = await uploadSupabaseDocument(item);
+  const uploadedDocument = await uploadSupabaseDocument(item.document, item.id, "recibidos");
+  const uploadedResponseDocument = await uploadSupabaseDocument(item.responseDocument, item.id, "respuestas");
   const assigneeId = item.assigneeId || state.people.find((person) => person.name === item.assignee)?.id || null;
   return {
     id: item.id,
@@ -253,6 +258,10 @@ async function incomingToDb(item) {
     observaciones: item.notes || null,
     documento_url: uploadedDocument?.path || item.document?.path || null,
     documento_nombre: uploadedDocument?.name || item.document?.name || null,
+    respuesta: item.responseText || null,
+    fecha_respuesta: item.responseAt || null,
+    respuesta_documento_url: uploadedResponseDocument?.path || item.responseDocument?.path || null,
+    respuesta_documento_nombre: uploadedResponseDocument?.name || item.responseDocument?.name || null,
     asignado_a: assigneeId,
     fecha_limite: item.dueAt || null,
     creado_en: item.createdAt || new Date().toISOString(),
@@ -335,22 +344,38 @@ function safeDocumentHref(value) {
   return "";
 }
 
-async function uploadSupabaseDocument(item) {
-  if (!item.document?.dataUrl) return item.document || null;
-  const response = await fetch(item.document.dataUrl);
+async function uploadSupabaseDocument(documentRecord, ownerId, folderName) {
+  if (!documentRecord?.dataUrl) return documentRecord || null;
+  if (LOCAL_DOCUMENT_SERVER_URL) {
+    const response = await fetch(`${LOCAL_DOCUMENT_SERVER_URL.replace(/\/$/, "")}/api/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document: documentRecord,
+        ownerId,
+        folderName,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`No se pudo guardar el documento local (${response.status}).`);
+    }
+    return response.json();
+  }
+
+  const response = await fetch(documentRecord.dataUrl);
   const blob = await response.blob();
   const year = new Date().getFullYear();
-  const filename = `${item.id}-${safeFilename(item.document.name)}`;
-  const path = `${year}/${filename}`;
+  const filename = `${ownerId}-${safeFilename(documentRecord.name)}`;
+  const path = `${folderName}/${year}/${filename}`;
   const { error } = await supabase.storage
     .from(SUPABASE_DOCUMENT_BUCKET)
     .upload(path, blob, {
-      contentType: item.document.type || blob.type || "application/octet-stream",
+      contentType: documentRecord.type || blob.type || "application/octet-stream",
       upsert: true,
     });
   if (error) throw error;
   return {
-    name: item.document.name,
+    name: documentRecord.name,
     path,
     url: null,
   };
@@ -554,8 +579,10 @@ function renderIncoming() {
   list.innerHTML = rows.map((item) => {
     const priorityClass = item.priority === "Alta" || item.priority === "Urgente" ? " high" : "";
     const documentHref = safeDocumentHref(item.document?.url || item.document?.dataUrl);
+    const responseDocumentHref = safeDocumentHref(item.responseDocument?.url || item.responseDocument?.dataUrl);
     const canAssign = hasRole("admin", "director");
     const canDelete = hasRole("admin", "director");
+    const canRespond = hasRole("admin", "director", "ventanilla", "responsable");
     return `
       <article class="record-card">
         <div class="record-main">
@@ -569,13 +596,16 @@ function renderIncoming() {
             <span>Estado: ${escapeHtml(item.status)}</span>
             ${item.assignee ? `<span>Asignado a: ${escapeHtml(item.assignee)}</span>` : ""}
             ${item.dueAt ? `<span>Limite: ${escapeHtml(item.dueAt)}</span>` : ""}
+            ${item.responseAt ? `<span>Respondido: ${escapeHtml(item.responseAt)}</span>` : ""}
           </div>
+          ${item.responseText ? `<div class="response-summary"><strong>Respuesta</strong><p>${escapeHtml(item.responseText)}</p></div>` : ""}
         </div>
         <div class="card-actions">
           ${canAssign ? `<button class="button" type="button" data-assign="${item.id}">Asignar</button>` : ""}
-          <button class="button" type="button" data-status="${item.id}" data-next-status="Respondido">Marcar respondido</button>
+          ${canRespond ? `<button class="button" type="button" data-response="${item.id}">Responder</button>` : ""}
           <button class="button ghost" type="button" data-email="${item.id}">Avisar director</button>
           ${documentHref ? `<a class="button ghost" href="${escapeHtml(documentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.document.name)}">Ver escaneo</a>` : ""}
+          ${responseDocumentHref ? `<a class="button ghost" href="${escapeHtml(responseDocumentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.responseDocument.name)}">Ver respuesta</a>` : ""}
           ${canDelete ? `<button class="link-button" type="button" data-delete-incoming="${item.id}">Eliminar</button>` : ""}
         </div>
       </article>
@@ -694,6 +724,87 @@ function showAuthScreen(show) {
   if (appShell) appShell.hidden = show;
   const logoutBtn = $("#logoutBtn");
   if (logoutBtn) logoutBtn.hidden = show || !supabaseOnline;
+  if (show) startParticles();
+  else stopParticles();
+}
+
+function startParticles() {
+  if (particleCleanup || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const canvas = $("#particleCanvas");
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  let width = 0;
+  let height = 0;
+  let frame = 0;
+  let particles = [];
+  const palette = ["rgba(255,255,255,0.72)", "rgba(240,228,207,0.7)", "rgba(128,181,156,0.55)"];
+
+  function resize() {
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+    canvas.width = Math.floor(width * pixelRatio);
+    canvas.height = Math.floor(height * pixelRatio);
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    const count = Math.max(28, Math.min(82, Math.floor((width * height) / 13500)));
+    particles = Array.from({ length: count }, () => ({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      vx: (Math.random() - 0.5) * 0.28,
+      vy: (Math.random() - 0.5) * 0.28,
+      radius: 1.2 + Math.random() * 2.4,
+      color: palette[Math.floor(Math.random() * palette.length)],
+    }));
+  }
+
+  function tick() {
+    context.clearRect(0, 0, width, height);
+    particles.forEach((particle, index) => {
+      particle.x += particle.vx;
+      particle.y += particle.vy;
+      if (particle.x < -10) particle.x = width + 10;
+      if (particle.x > width + 10) particle.x = -10;
+      if (particle.y < -10) particle.y = height + 10;
+      if (particle.y > height + 10) particle.y = -10;
+
+      context.beginPath();
+      context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2);
+      context.fillStyle = particle.color;
+      context.fill();
+
+      for (let next = index + 1; next < particles.length; next += 1) {
+        const other = particles[next];
+        const dx = particle.x - other.x;
+        const dy = particle.y - other.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < 115) {
+          context.beginPath();
+          context.moveTo(particle.x, particle.y);
+          context.lineTo(other.x, other.y);
+          context.strokeStyle = `rgba(255,255,255,${0.12 * (1 - distance / 115)})`;
+          context.lineWidth = 1;
+          context.stroke();
+        }
+      }
+    });
+    frame = requestAnimationFrame(tick);
+  }
+
+  resize();
+  window.addEventListener("resize", resize);
+  frame = requestAnimationFrame(tick);
+  particleCleanup = () => {
+    cancelAnimationFrame(frame);
+    window.removeEventListener("resize", resize);
+    context.clearRect(0, 0, width, height);
+    particleCleanup = null;
+  };
+}
+
+function stopParticles() {
+  if (particleCleanup) particleCleanup();
 }
 
 function bindAuth() {
@@ -862,6 +973,30 @@ function bindForms() {
       showMessage(`No se pudo guardar la asignacion: ${describeError(error)}`, "error");
     }
   });
+
+  $("#responseForm").addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "save-response") return;
+    event.preventDefault();
+    try {
+      requireRole("admin", "director", "ventanilla", "responsable");
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      const item = state.incoming.find((row) => row.id === data.id);
+      if (!item) return;
+      const responseFile = form.elements.responseDocument.files[0];
+      item.responseAt = data.responseAt;
+      item.responseText = data.responseText.trim();
+      item.responseDocument = await fileToRecord(responseFile) || item.responseDocument || null;
+      item.status = "Respondido";
+      await put("incoming", item);
+      $("#responseDialog").close();
+      form.reset();
+      await refresh();
+      showMessage("Respuesta guardada correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo guardar la respuesta: ${describeError(error)}`, "error");
+    }
+  });
 }
 
 function bindLists() {
@@ -879,6 +1014,18 @@ function bindLists() {
       form.elements.dueAt.value = item.dueAt || "";
       renderAssignmentDocument(item);
       $("#assignmentDialog").showModal();
+      return;
+    }
+
+    if (target.dataset.response) {
+      const item = state.incoming.find((row) => row.id === target.dataset.response);
+      if (!item) return;
+      const form = $("#responseForm");
+      form.elements.id.value = item.id;
+      form.elements.responseAt.value = item.responseAt || today();
+      form.elements.responseText.value = item.responseText || "";
+      form.elements.responseDocument.value = "";
+      $("#responseDialog").showModal();
       return;
     }
 

@@ -484,6 +484,37 @@ function normalize(value = "") {
   return String(value).toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
+function normalizePrefix(value = "") {
+  return String(value || "DPDU").trim().toUpperCase() || "DPDU";
+}
+
+function outgoingYear(value) {
+  return new Date(`${value || today()}T00:00:00`).getFullYear();
+}
+
+function nextOutgoingNumber(prefixValue, dateValue) {
+  const prefix = normalizePrefix(prefixValue);
+  const year = outgoingYear(dateValue);
+  const lastNumber = state.outgoing
+    .filter((item) => normalizePrefix(item.prefix) === prefix && outgoingYear(item.createdAt) === year)
+    .reduce((max, item) => Math.max(max, Number(item.number) || 0), 0);
+  return lastNumber + 1;
+}
+
+function nextOutgoingFullNumber(prefixValue, dateValue) {
+  const prefix = normalizePrefix(prefixValue);
+  const number = nextOutgoingNumber(prefix, dateValue);
+  return `${prefix}-${String(number).padStart(3, "0")}/${outgoingYear(dateValue)}`;
+}
+
+function statusClass(value = "") {
+  const normalized = normalize(value);
+  if (normalized.includes("respondido")) return " done";
+  if (normalized.includes("asignado")) return " assigned";
+  if (normalized.includes("revision")) return " review";
+  return " pending";
+}
+
 async function loadState() {
   const [people, settingsRows] = await Promise.all([
     getAll("people"),
@@ -540,11 +571,16 @@ function renderPermissions() {
 function renderStats() {
   const pending = state.incoming.filter((item) => item.status !== "Respondido").length;
   const assigned = state.incoming.filter((item) => item.assignee).length;
+  const outgoingForm = $("#outgoingForm");
+  const nextFullNumber = nextOutgoingFullNumber(
+    outgoingForm?.elements.prefix.value,
+    outgoingForm?.elements.createdAt.value
+  );
   $("#statReceived").textContent = state.incoming.length;
   $("#statPending").textContent = pending;
   $("#statAssigned").textContent = assigned;
-  $("#statNext").textContent = String(state.settings.nextNumber).padStart(3, "0");
-  $("#nextBadge").textContent = `Siguiente ${String(state.settings.nextNumber).padStart(3, "0")}`;
+  $("#statNext").textContent = nextFullNumber;
+  $("#nextBadge").textContent = `Siguiente ${nextFullNumber}`;
   $("#settingsForm").elements.directorEmail.value = state.settings.directorEmail;
 }
 
@@ -559,8 +595,8 @@ function renderPeople() {
         ${canDelete ? `<button class="link-button" type="button" data-delete-person="${person.id}">Eliminar</button>` : ""}
       </div>
       <div class="meta">
-        <span>${escapeHtml(person.role)}</span>
-        ${person.email ? `<span>${escapeHtml(person.email)}</span>` : ""}
+        <span class="meta-chip">${escapeHtml(person.role)}</span>
+        ${person.email ? `<span class="meta-chip">${escapeHtml(person.email)}</span>` : ""}
       </div>
     </article>
   `).join("");
@@ -578,6 +614,7 @@ function renderIncoming() {
   if (!rows.length) return renderEmpty(list);
   list.innerHTML = rows.map((item) => {
     const priorityClass = item.priority === "Alta" || item.priority === "Urgente" ? " high" : "";
+    const statusPillClass = statusClass(item.status);
     const documentHref = safeDocumentHref(item.document?.url || item.document?.dataUrl);
     const responseDocumentHref = safeDocumentHref(item.responseDocument?.url || item.responseDocument?.dataUrl);
     const canAssign = hasRole("admin", "director");
@@ -587,21 +624,21 @@ function renderIncoming() {
       <article class="record-card">
         <div class="record-main">
           <div class="record-title">
-            <strong>${escapeHtml(item.folio)} · ${escapeHtml(item.sender)}</strong>
+            <strong>${escapeHtml(item.folio)} - ${escapeHtml(item.sender)}</strong>
             <span class="pill${priorityClass}">${escapeHtml(item.priority)}</span>
           </div>
-          <span>${escapeHtml(item.subject)}</span>
+          <p class="record-subject">${escapeHtml(item.subject)}</p>
           <div class="meta">
-            <span>Recibido: ${escapeHtml(item.receivedAt)}</span>
-            <span>Estado: ${escapeHtml(item.status)}</span>
-            ${item.assignee ? `<span>Asignado a: ${escapeHtml(item.assignee)}</span>` : ""}
-            ${item.dueAt ? `<span>Limite: ${escapeHtml(item.dueAt)}</span>` : ""}
-            ${item.responseAt ? `<span>Respondido: ${escapeHtml(item.responseAt)}</span>` : ""}
+            <span class="status-pill${statusPillClass}">${escapeHtml(item.status)}</span>
+            <span class="meta-chip">Recibido: ${escapeHtml(item.receivedAt)}</span>
+            ${item.assignee ? `<span class="meta-chip">Asignado a: ${escapeHtml(item.assignee)}</span>` : ""}
+            ${item.dueAt ? `<span class="meta-chip">Limite: ${escapeHtml(item.dueAt)}</span>` : ""}
+            ${item.responseAt ? `<span class="meta-chip">Respondido: ${escapeHtml(item.responseAt)}</span>` : ""}
           </div>
           ${item.responseText ? `<div class="response-summary"><strong>Respuesta</strong><p>${escapeHtml(item.responseText)}</p></div>` : ""}
         </div>
         <div class="card-actions">
-          ${canAssign ? `<button class="button" type="button" data-assign="${item.id}">Asignar</button>` : ""}
+          ${canAssign ? `<button class="button primary soft-primary" type="button" data-assign="${item.id}">Asignar</button>` : ""}
           ${canRespond ? `<button class="button" type="button" data-response="${item.id}">Responder</button>` : ""}
           <button class="button ghost" type="button" data-email="${item.id}">Avisar director</button>
           ${documentHref ? `<a class="button ghost" href="${escapeHtml(documentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.document.name)}">Ver escaneo</a>` : ""}
@@ -621,16 +658,16 @@ function renderOutgoing() {
   list.innerHTML = rows.map((item) => `
     <article class="record-card">
       <div class="record-title">
-        <strong>${escapeHtml(item.fullNumber)}</strong>
+        <strong class="code-number">${escapeHtml(item.fullNumber)}</strong>
         <span class="pill">${escapeHtml(item.createdAt)}</span>
       </div>
-      <span>${escapeHtml(item.subject)}</span>
+      <p class="record-subject">${escapeHtml(item.subject)}</p>
       <div class="meta">
-        <span>Para: ${escapeHtml(item.recipient)}</span>
-        <span>Elabora: ${escapeHtml(item.author)}</span>
+        <span class="meta-chip">Para: ${escapeHtml(item.recipient)}</span>
+        <span class="meta-chip">Elabora: ${escapeHtml(item.author)}</span>
       </div>
       <div class="card-actions">
-        <button class="button ghost" type="button" data-copy="${item.fullNumber}">Copiar numero</button>
+        <button class="button primary soft-primary" type="button" data-copy="${item.fullNumber}">Copiar numero</button>
         ${hasRole("admin") ? `<button class="link-button" type="button" data-delete-outgoing="${item.id}">Eliminar</button>` : ""}
       </div>
     </article>
@@ -858,6 +895,9 @@ function bindTabs() {
 function bindForms() {
   $("#incomingForm").elements.receivedAt.value = today();
   $("#outgoingForm").elements.createdAt.value = today();
+  ["prefix", "createdAt"].forEach((name) => {
+    $("#outgoingForm").elements[name].addEventListener("input", renderStats);
+  });
 
   $("#incomingForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -893,13 +933,14 @@ function bindForms() {
     try {
       const form = event.currentTarget;
       const data = Object.fromEntries(new FormData(form));
-      const number = state.settings.nextNumber;
-      const year = new Date(`${data.createdAt}T00:00:00`).getFullYear();
+      const prefix = normalizePrefix(data.prefix);
+      const number = nextOutgoingNumber(prefix, data.createdAt);
+      const year = outgoingYear(data.createdAt);
       const item = {
         id: uid(),
         number,
-        fullNumber: `${data.prefix.toUpperCase()}-${String(number).padStart(3, "0")}/${year}`,
-        prefix: data.prefix.toUpperCase(),
+        fullNumber: `${prefix}-${String(number).padStart(3, "0")}/${year}`,
+        prefix,
         createdAt: data.createdAt,
         recipient: data.recipient.trim(),
         subject: data.subject.trim(),
@@ -908,8 +949,7 @@ function bindForms() {
       if (supabaseOnline) {
         await put("outgoing", item);
       } else {
-        state.settings.nextNumber += 1;
-        await Promise.all([put("outgoing", item), saveSettings()]);
+        await put("outgoing", item);
       }
       form.reset();
       form.elements.prefix.value = "DPDU";
@@ -1107,6 +1147,7 @@ function bindImportExport() {
 function bindInstallPrompt() {
   let deferredPrompt;
   const installBtn = $("#installBtn");
+  if (!installBtn) return;
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     deferredPrompt = event;
@@ -1118,6 +1159,33 @@ function bindInstallPrompt() {
     await deferredPrompt.userChoice;
     deferredPrompt = null;
     installBtn.hidden = true;
+  });
+}
+
+function bindLiveRefresh() {
+  let refreshing = false;
+  const isEditing = () => {
+    const active = document.activeElement;
+    const editingTags = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+    return document.hidden
+      || Boolean($("dialog[open]"))
+      || Boolean(active && editingTags.has(active.tagName));
+  };
+  const run = async () => {
+    if (refreshing || isEditing()) return;
+    refreshing = true;
+    try {
+      await refresh();
+    } catch (error) {
+      console.warn("No se pudo actualizar en vivo:", error);
+    } finally {
+      refreshing = false;
+    }
+  };
+  setInterval(run, 6000);
+  window.addEventListener("focus", run);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) run();
   });
 }
 
@@ -1141,6 +1209,7 @@ async function init() {
   bindLists();
   bindImportExport();
   bindInstallPrompt();
+  bindLiveRefresh();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js");
   }

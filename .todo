@@ -1,6 +1,0 @@
-Pendientes:
-
-- No guardar contrasenas ni llaves secretas en el repositorio.
-- Configurar Supabase desde variables de entorno en Netlify.
-- Ejecutar data/supabase-paso-6.sql en Supabase.
-- Publicar la carpeta public/ en Netlify.

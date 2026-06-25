@@ -222,16 +222,24 @@ set search_path = public
 as $$
 declare
   v_numero integer;
+  v_prefijo text;
+  v_anio integer;
   v_row oficios_generados;
 begin
   if public.mi_rol() not in ('admin', 'director', 'ventanilla') then
     raise exception 'No autorizado';
   end if;
 
-  update configuracion
-  set siguiente_numero = siguiente_numero + 1
-  where id = 'main'
-  returning siguiente_numero - 1 into v_numero;
+  v_prefijo := upper(coalesce(nullif(trim(p_prefijo), ''), 'DPDU'));
+  v_anio := extract(year from p_fecha)::int;
+
+  perform pg_advisory_xact_lock(hashtext(v_prefijo || ':' || v_anio::text));
+
+  select coalesce(max(numero), 0) + 1
+  into v_numero
+  from oficios_generados
+  where prefijo = v_prefijo
+    and extract(year from fecha)::int = v_anio;
 
   insert into oficios_generados (
     numero,
@@ -244,8 +252,8 @@ begin
   )
   values (
     v_numero,
-    upper(p_prefijo) || '-' || lpad(v_numero::text, 3, '0') || '/' || extract(year from p_fecha)::int,
-    upper(p_prefijo),
+    v_prefijo || '-' || lpad(v_numero::text, 3, '0') || '/' || v_anio,
+    v_prefijo,
     p_fecha,
     p_destinatario,
     p_asunto,

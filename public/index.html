@@ -7,7 +7,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icon.svg">
-    <link rel="stylesheet" href="styles.css?v=9">
+    <link rel="stylesheet" href="styles.css?v=15">
   </head>
   <body>
     <section class="auth-screen" id="authScreen" hidden>
@@ -42,6 +42,7 @@
           <div class="brand-mark" aria-hidden="true">O</div>
           <div>
             <strong>Oficios</strong>
+            <span>DPDU</span>
           </div>
         </div>
 
@@ -52,7 +53,7 @@
           </button>
           <button class="tab" type="button" data-view="outgoing">
             <span aria-hidden="true">#</span>
-            Consecutivos
+            Expedidos
           </button>
           <button class="tab" type="button" data-view="directory">
             <span aria-hidden="true">PE</span>
@@ -72,10 +73,10 @@
             <h1>Recepcion y seguimiento de oficios</h1>
           </div>
           <div class="top-actions">
-            <button class="button ghost" type="button" id="exportBtn">Exportar respaldo</button>
+            <button class="button ghost" type="button" id="exportBtn">Exportar Excel</button>
             <label class="button ghost file-label">
-              Importar respaldo
-              <input id="importInput" type="file" accept="application/json">
+              Importar Excel
+              <input id="importInput" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/json">
             </label>
           </div>
         </header>
@@ -192,7 +193,14 @@
               <div class="field-grid">
                 <label>
                   Prefijo
-                  <input name="prefix" value="DPDU" maxlength="12" autocomplete="off" autocapitalize="characters" required>
+                  <input name="prefix" value="DPDU" maxlength="12" autocomplete="off" autocapitalize="characters" list="prefixOptions" required>
+                  <datalist id="prefixOptions">
+                    <option value="DPDU"></option>
+                    <option value="MR"></option>
+                    <option value="PM"></option>
+                    <option value="DU"></option>
+                    <option value="OP"></option>
+                  </datalist>
                 </label>
                 <label>
                   Fecha
@@ -241,8 +249,12 @@
                   Correo del director
                   <input name="directorEmail" type="email" placeholder="director@municipio.gob.mx" required>
                 </label>
+                <label>
+                  Clave para borrar registros
+                  <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Cambia la clave inicial">
+                </label>
                 <div class="form-actions">
-                  <button class="button primary" type="submit">Guardar correo</button>
+                  <button class="button primary" type="submit">Guardar configuracion</button>
                 </div>
               </form>
 
@@ -261,6 +273,10 @@
                 <label>
                   Correo
                   <input name="email" type="email" placeholder="correo@municipio.gob.mx">
+                </label>
+                <label>
+                  WhatsApp
+                  <input name="phone" type="tel" inputmode="tel" placeholder="Ej. 6671234567">
                 </label>
                 <div class="form-actions">
                   <button class="button primary" type="submit">Agregar persona</button>
@@ -287,8 +303,8 @@
         </div>
         <input type="hidden" name="id">
         <label>
-          Responsable
-          <select name="assignee" required></select>
+          Responsables
+          <select name="assignee" multiple required></select>
         </label>
         <label>
           Fecha limite
@@ -336,6 +352,6 @@
       </div>
     </template>
 
-    <script src="app.js?v=9" type="module"></script>
+    <script src="app.js?v=15" type="module"></script>
   </body>
 </html>

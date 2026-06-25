@@ -6,6 +6,8 @@ const DB_VERSION = 1;
 const STORES = ["incoming", "outgoing", "people", "settings"];
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+const XLSX_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
+const DEFAULT_ADMIN_DELETE_KEY = "1234";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => crypto.randomUUID();
@@ -24,7 +26,7 @@ let state = {
   incoming: [],
   outgoing: [],
   people: [],
-  settings: { nextNumber: 1, directorEmail: "director@municipio.gob.mx" },
+  settings: { nextNumber: 1, directorEmail: "director@municipio.gob.mx", adminDeleteKey: DEFAULT_ADMIN_DELETE_KEY },
 };
 
 const SUPABASE_TABLES = {
@@ -189,6 +191,7 @@ function personToApp(row) {
     name: row.nombre,
     role: row.cargo,
     email: row.correo || "",
+    phone: row.telefono || "",
   };
 }
 
@@ -198,6 +201,7 @@ function personToDb(person) {
     nombre: person.name,
     cargo: person.role,
     correo: person.email || null,
+    telefono: person.phone || null,
   };
 }
 
@@ -223,6 +227,7 @@ async function signedStorageDocument(pathValue, nameValue) {
 
 async function incomingToApp(row) {
   const person = state.people.find((item) => item.id === row.asignado_a);
+  const assignees = person ? [person.name] : [];
   return {
     id: row.id,
     folio: row.folio,
@@ -237,7 +242,9 @@ async function incomingToApp(row) {
     responseAt: row.fecha_respuesta || "",
     responseDocument: await signedStorageDocument(row.respuesta_documento_url, row.respuesta_documento_nombre),
     assignee: person?.name || "",
+    assignees,
     assigneeId: row.asignado_a || "",
+    assigneeIds: row.asignado_a ? [row.asignado_a] : [],
     dueAt: row.fecha_limite || "",
     createdAt: row.creado_en || new Date().toISOString(),
   };
@@ -246,7 +253,7 @@ async function incomingToApp(row) {
 async function incomingToDb(item) {
   const uploadedDocument = await uploadSupabaseDocument(item.document, item.id, "recibidos");
   const uploadedResponseDocument = await uploadSupabaseDocument(item.responseDocument, item.id, "respuestas");
-  const assigneeId = item.assigneeId || state.people.find((person) => person.name === item.assignee)?.id || null;
+  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || state.people.find((person) => person.name === item.assignee)?.id || null;
   return {
     id: item.id,
     folio: item.folio,
@@ -515,6 +522,53 @@ function statusClass(value = "") {
   return " pending";
 }
 
+function normalizePhone(value = "") {
+  return String(value).replace(/\D/g, "");
+}
+
+function whatsappPhone(value = "") {
+  const phone = normalizePhone(value);
+  if (!phone) return "";
+  return phone.startsWith("52") ? phone : `52${phone}`;
+}
+
+function getAssigneeNames(item) {
+  if (Array.isArray(item.assignees) && item.assignees.length) return item.assignees.filter(Boolean);
+  if (item.assignee) return [item.assignee];
+  return [];
+}
+
+function getAdminDeleteKey() {
+  return state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY;
+}
+
+function confirmAdminDelete() {
+  const key = window.prompt("Clave de administrador para borrar:");
+  if (key === null) return false;
+  if (key !== getAdminDeleteKey()) {
+    showMessage("Clave de administrador incorrecta.", "error");
+    return false;
+  }
+  return window.confirm("Esta accion borrara el registro. Deseas continuar?");
+}
+
+function normalizeIncomingItem(item) {
+  const assignees = Array.isArray(item.assignees)
+    ? item.assignees.filter(Boolean)
+    : String(item.assignees || item.assignee || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+  return {
+    ...item,
+    assignees,
+    assignee: assignees.join(", ") || item.assignee || "",
+  };
+}
+
+let xlsxPromise;
+function loadXlsx() {
+  if (!xlsxPromise) xlsxPromise = import(XLSX_URL);
+  return xlsxPromise;
+}
+
 async function loadState() {
   const [people, settingsRows] = await Promise.all([
     getAll("people"),
@@ -522,6 +576,7 @@ async function loadState() {
   ]);
   state.people = people.sort((a, b) => a.name.localeCompare(b.name));
   state.settings = settingsRows.find((row) => row.id === "main") || state.settings;
+  state.settings = { adminDeleteKey: DEFAULT_ADMIN_DELETE_KEY, ...state.settings };
   if (!state.people.length) {
     await seedPeople();
     state.people = await getAll("people");
@@ -530,7 +585,7 @@ async function loadState() {
     getAll("incoming"),
     getAll("outgoing"),
   ]);
-  state.incoming = incoming.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  state.incoming = incoming.map(normalizeIncomingItem).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.outgoing = outgoing.sort((a, b) => b.number - a.number);
   render();
 }
@@ -570,7 +625,7 @@ function renderPermissions() {
 
 function renderStats() {
   const pending = state.incoming.filter((item) => item.status !== "Respondido").length;
-  const assigned = state.incoming.filter((item) => item.assignee).length;
+  const assigned = state.incoming.filter((item) => getAssigneeNames(item).length).length;
   const outgoingForm = $("#outgoingForm");
   const nextFullNumber = nextOutgoingFullNumber(
     outgoingForm?.elements.prefix.value,
@@ -582,6 +637,7 @@ function renderStats() {
   $("#statNext").textContent = nextFullNumber;
   $("#nextBadge").textContent = `Siguiente ${nextFullNumber}`;
   $("#settingsForm").elements.directorEmail.value = state.settings.directorEmail;
+  $("#settingsForm").elements.adminDeleteKey.value = state.settings.adminDeleteKey || "";
 }
 
 function renderPeople() {
@@ -597,6 +653,7 @@ function renderPeople() {
       <div class="meta">
         <span class="meta-chip">${escapeHtml(person.role)}</span>
         ${person.email ? `<span class="meta-chip">${escapeHtml(person.email)}</span>` : ""}
+        ${person.phone ? `<span class="meta-chip">WhatsApp: ${escapeHtml(person.phone)}</span>` : ""}
       </div>
     </article>
   `).join("");
@@ -607,7 +664,7 @@ function renderIncoming() {
   const q = normalize($("#searchIncoming").value);
   const status = $("#statusFilter").value;
   const rows = state.incoming.filter((item) => {
-    const matchesText = !q || normalize(`${item.folio} ${item.sender} ${item.subject} ${item.assignee || ""}`).includes(q);
+    const matchesText = !q || normalize(`${item.folio} ${item.sender} ${item.subject} ${getAssigneeNames(item).join(" ")}`).includes(q);
     const matchesStatus = !status || item.status === status;
     return matchesText && matchesStatus;
   });
@@ -631,7 +688,7 @@ function renderIncoming() {
           <div class="meta">
             <span class="status-pill${statusPillClass}">${escapeHtml(item.status)}</span>
             <span class="meta-chip">Recibido: ${escapeHtml(item.receivedAt)}</span>
-            ${item.assignee ? `<span class="meta-chip">Asignado a: ${escapeHtml(item.assignee)}</span>` : ""}
+            ${getAssigneeNames(item).length ? `<span class="meta-chip">Asignado a: ${escapeHtml(getAssigneeNames(item).join(", "))}</span>` : ""}
             ${item.dueAt ? `<span class="meta-chip">Limite: ${escapeHtml(item.dueAt)}</span>` : ""}
             ${item.responseAt ? `<span class="meta-chip">Respondido: ${escapeHtml(item.responseAt)}</span>` : ""}
           </div>
@@ -701,6 +758,11 @@ function fillSelects() {
   const options = state.people.map((person) => `<option value="${escapeHtml(person.name)}">${escapeHtml(person.name)} - ${escapeHtml(person.role)}</option>`).join("");
   $("#authorSelect").innerHTML = options;
   $("#assignmentForm select[name='assignee']").innerHTML = options;
+  const prefixOptions = $("#prefixOptions");
+  if (prefixOptions) {
+    const prefixes = new Set(["DPDU", "CFAGU", "IP", "PP", "MR", "PYSP", ...state.outgoing.map((item) => normalizePrefix(item.prefix))]);
+    prefixOptions.innerHTML = [...prefixes].map((prefix) => `<option value="${escapeHtml(prefix)}"></option>`).join("");
+  }
 }
 
 function buildDirectorEmail(item) {
@@ -723,6 +785,48 @@ function buildDirectorEmail(item) {
 
 function openDirectorEmail(item) {
   window.location.href = buildDirectorEmail(item);
+}
+
+function peopleForAssignees(item) {
+  const names = new Set(getAssigneeNames(item));
+  return state.people.filter((person) => names.has(person.name));
+}
+
+function buildAssignmentMessage(item) {
+  return [
+    "Se te asigno un oficio para seguimiento.",
+    `Folio: ${item.folio}`,
+    `Remitente: ${item.sender}`,
+    `Asunto: ${item.subject}`,
+    item.dueAt ? `Fecha limite: ${item.dueAt}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function mailtoAssignment(item, people) {
+  const emails = people.map((person) => person.email).filter(Boolean);
+  if (!emails.length) return "";
+  const subject = encodeURIComponent(`Oficio asignado: ${item.folio}`);
+  const body = encodeURIComponent(buildAssignmentMessage(item));
+  return `mailto:${emails.join(",")}?subject=${subject}&body=${body}`;
+}
+
+function whatsappAssignmentLinks(item, people) {
+  const text = encodeURIComponent(buildAssignmentMessage(item));
+  return people
+    .map((person) => whatsappPhone(person.phone))
+    .filter(Boolean)
+    .map((phone) => `https://wa.me/52${phone}?text=${text}`);
+}
+
+function openAssignmentNotifications(item) {
+  const people = peopleForAssignees(item);
+  const mail = mailtoAssignment(item, people);
+  const whatsappLinks = whatsappAssignmentLinks(item, people);
+  if (mail) window.location.href = mail;
+  whatsappLinks.slice(0, 3).forEach((link) => window.open(link, "_blank", "noopener"));
+  if (!mail && !whatsappLinks.length) {
+    showMessage("Asignacion guardada. Agrega correo o WhatsApp al personal para notificar.", "info");
+  }
 }
 
 async function saveSettings() {
@@ -971,6 +1075,7 @@ function bindForms() {
         name: data.name.trim(),
         role: data.role.trim(),
         email: data.email.trim(),
+        phone: normalizePhone(data.phone),
       });
       form.reset();
       await refresh();
@@ -985,6 +1090,7 @@ function bindForms() {
     try {
       const form = event.currentTarget;
       state.settings.directorEmail = form.elements.directorEmail.value.trim();
+      state.settings.adminDeleteKey = form.elements.adminDeleteKey.value.trim() || DEFAULT_ADMIN_DELETE_KEY;
       await saveSettings();
       await refresh();
       showMessage("Configuracion guardada correctamente.", "success");
@@ -999,16 +1105,23 @@ function bindForms() {
     try {
       requireRole("admin", "director");
       const dialog = $("#assignmentDialog");
-      const data = Object.fromEntries(new FormData(event.currentTarget));
+      const formData = new FormData(event.currentTarget);
+      const data = Object.fromEntries(formData);
       const item = state.incoming.find((row) => row.id === data.id);
       if (!item) return;
-      item.assignee = data.assignee;
+      const assignees = formData.getAll("assignee").filter(Boolean);
+      item.assignees = assignees;
+      item.assignee = assignees.join(", ");
+      item.assigneeIds = assignees
+        .map((name) => state.people.find((person) => person.name === name)?.id)
+        .filter(Boolean);
       item.dueAt = data.dueAt;
       item.status = "Asignado";
       await put("incoming", item);
       dialog.close();
       await refresh();
       showMessage("Asignacion guardada correctamente.", "success");
+      openAssignmentNotifications(item);
     } catch (error) {
       showMessage(`No se pudo guardar la asignacion: ${describeError(error)}`, "error");
     }
@@ -1050,7 +1163,10 @@ function bindLists() {
       if (!item) return;
       const form = $("#assignmentForm");
       form.elements.id.value = item.id;
-      form.elements.assignee.value = item.assignee || state.people[0]?.name || "";
+      const selected = new Set(getAssigneeNames(item));
+      [...form.elements.assignee.options].forEach((option) => {
+        option.selected = selected.has(option.value);
+      });
       form.elements.dueAt.value = item.dueAt || "";
       renderAssignmentDocument(item);
       $("#assignmentDialog").showModal();
@@ -1085,18 +1201,21 @@ function bindLists() {
     }
 
     if (target.dataset.deleteIncoming) {
+      if (!confirmAdminDelete()) return;
       await remove("incoming", target.dataset.deleteIncoming);
       await refresh();
       return;
     }
 
     if (target.dataset.deleteOutgoing) {
+      if (!confirmAdminDelete()) return;
       await remove("outgoing", target.dataset.deleteOutgoing);
       await refresh();
       return;
     }
 
     if (target.dataset.deletePerson) {
+      if (!confirmAdminDelete()) return;
       await remove("people", target.dataset.deletePerson);
       await refresh();
       return;
@@ -1114,33 +1233,146 @@ function bindLists() {
   });
 }
 
+function excelRows() {
+  return {
+    Recibidos: state.incoming.map((item) => ({
+      id: item.id,
+      folio: item.folio,
+      fecha_recepcion: item.receivedAt,
+      remitente: item.sender,
+      asunto: item.subject,
+      prioridad: item.priority,
+      estado: item.status,
+      responsables: getAssigneeNames(item).join("; "),
+      fecha_limite: item.dueAt || "",
+      fecha_respuesta: item.responseAt || "",
+      observaciones: item.notes || "",
+      respuesta: item.responseText || "",
+    })),
+    Consecutivos: state.outgoing.map((item) => ({
+      id: item.id,
+      numero: item.number,
+      numero_completo: item.fullNumber,
+      prefijo: item.prefix,
+      fecha: item.createdAt,
+      destinatario: item.recipient,
+      asunto: item.subject,
+      elaboro: item.author,
+    })),
+    Personal: state.people.map((person) => ({
+      id: person.id,
+      nombre: person.name,
+      cargo: person.role,
+      correo: person.email || "",
+      whatsapp: person.phone || "",
+    })),
+    Configuracion: [{
+      id: "main",
+      siguiente_numero: state.settings.nextNumber,
+      correo_director: state.settings.directorEmail,
+      clave_borrado: state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY,
+    }],
+  };
+}
+
+async function exportExcel() {
+  const XLSX = await loadXlsx();
+  const workbook = XLSX.utils.book_new();
+  const rows = excelRows();
+  Object.entries(rows).forEach(([name, data]) => {
+    const sheet = XLSX.utils.json_to_sheet(data);
+    XLSX.utils.book_append_sheet(workbook, sheet, name);
+  });
+  XLSX.writeFile(workbook, `respaldo-oficios-${today()}.xlsx`);
+}
+
+function importedFromWorkbook(workbook, XLSX) {
+  const sheet = (name) => XLSX.utils.sheet_to_json(workbook.Sheets[name] || {});
+  const incoming = sheet("Recibidos").map((row) => normalizeIncomingItem({
+    id: row.id || uid(),
+    folio: row.folio || "",
+    receivedAt: row.fecha_recepcion || today(),
+    sender: row.remitente || "",
+    subject: row.asunto || "",
+    priority: row.prioridad || "Normal",
+    status: row.estado || "Pendiente de asignacion",
+    assignees: String(row.responsables || "").split(";").map((value) => value.trim()).filter(Boolean),
+    dueAt: row.fecha_limite || "",
+    responseAt: row.fecha_respuesta || "",
+    notes: row.observaciones || "",
+    responseText: row.respuesta || "",
+    createdAt: new Date().toISOString(),
+  }));
+  const outgoing = sheet("Consecutivos").map((row) => ({
+    id: row.id || uid(),
+    number: Number(row.numero) || 1,
+    fullNumber: row.numero_completo || "",
+    prefix: row.prefijo || "DPDU",
+    createdAt: row.fecha || today(),
+    recipient: row.destinatario || "",
+    subject: row.asunto || "",
+    author: row.elaboro || "",
+  }));
+  const people = sheet("Personal").map((row) => ({
+    id: row.id || uid(),
+    name: row.nombre || "",
+    role: row.cargo || "",
+    email: row.correo || "",
+    phone: row.whatsapp || "",
+  })).filter((person) => person.name);
+  const config = sheet("Configuracion")[0] || {};
+  return {
+    incoming,
+    outgoing,
+    people,
+    settings: {
+      id: "main",
+      nextNumber: Number(config.siguiente_numero) || state.settings.nextNumber,
+      directorEmail: config.correo_director || state.settings.directorEmail,
+      adminDeleteKey: config.clave_borrado || state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY,
+    },
+  };
+}
+
+async function parseImportFile(file) {
+  if (file.name.toLowerCase().endsWith(".json")) return JSON.parse(await file.text());
+  const XLSX = await loadXlsx();
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer);
+  return importedFromWorkbook(workbook, XLSX);
+}
+
 function bindImportExport() {
-  $("#exportBtn").addEventListener("click", () => {
-    const payload = JSON.stringify(state, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `respaldo-oficios-${today()}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+  $("#exportBtn").addEventListener("click", async () => {
+    try {
+      await exportExcel();
+      showMessage("Respaldo de Excel generado.", "success");
+    } catch (error) {
+      showMessage(`No se pudo exportar Excel: ${describeError(error)}`, "error");
+    }
   });
 
   $("#importInput").addEventListener("change", async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    const imported = JSON.parse(await file.text());
-    const incoming = imported.incoming || [];
-    const outgoing = imported.outgoing || [];
-    const people = imported.people || [];
-    const settings = imported.settings || state.settings;
-    await Promise.all([
-      ...incoming.map((item) => put("incoming", item)),
-      ...outgoing.map((item) => put("outgoing", item)),
-      ...people.map((item) => put("people", item)),
-      put("settings", { id: "main", ...settings }),
-    ]);
-    event.target.value = "";
-    await refresh();
+    try {
+      const file = event.target.files[0];
+      if (!file) return;
+      const imported = await parseImportFile(file);
+      const incoming = imported.incoming || [];
+      const outgoing = imported.outgoing || [];
+      const people = imported.people || [];
+      const settings = imported.settings || state.settings;
+      await Promise.all([
+        ...incoming.map((item) => put("incoming", normalizeIncomingItem(item))),
+        ...outgoing.map((item) => put("outgoing", item)),
+        ...people.map((item) => put("people", item)),
+        put("settings", { id: "main", ...settings }),
+      ]);
+      event.target.value = "";
+      await refresh();
+      showMessage("Importacion completada.", "success");
+    } catch (error) {
+      showMessage(`No se pudo importar: ${describeError(error)}`, "error");
+    }
   });
 }
 

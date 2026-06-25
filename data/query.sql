@@ -3,6 +3,7 @@ create table personal (
   nombre text not null,
   cargo text not null,
   correo text,
+  telefono text,
   creado_en timestamptz default now()
 );
 

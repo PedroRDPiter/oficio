@@ -9,6 +9,9 @@ create table if not exists perfiles (
   creado_en timestamptz default now()
 );
 
+alter table personal
+add column if not exists telefono text;
+
 alter table oficios_recibidos
 add column if not exists respuesta text,
 add column if not exists fecha_respuesta date,

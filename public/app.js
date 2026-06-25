@@ -13,6 +13,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => crypto.randomUUID();
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 let db;
 let apiOnline = false;
@@ -201,12 +202,20 @@ function personToApp(row) {
 
 function personToDb(person) {
   return {
-    id: person.id,
+    id: supabaseRecordId(person.id),
     nombre: person.name,
     cargo: person.role,
     correo: person.email || null,
     telefono: person.phone || null,
   };
+}
+
+function supabaseRecordId(value) {
+  return UUID_PATTERN.test(String(value || "")) ? value : uid();
+}
+
+function supabaseOptionalUuid(value) {
+  return UUID_PATTERN.test(String(value || "")) ? value : null;
 }
 
 async function signedStorageDocument(pathValue, nameValue) {
@@ -255,11 +264,12 @@ async function incomingToApp(row) {
 }
 
 async function incomingToDb(item) {
-  const uploadedDocument = await uploadSupabaseDocument(item.document, item.id, "recibidos");
-  const uploadedResponseDocument = await uploadSupabaseDocument(item.responseDocument, item.id, "respuestas");
+  const recordId = supabaseRecordId(item.id);
+  const uploadedDocument = await uploadSupabaseDocument(item.document, recordId, "recibidos");
+  const uploadedResponseDocument = await uploadSupabaseDocument(item.responseDocument, recordId, "respuestas");
   const assigneeId = item.assigneeIds?.[0] || item.assigneeId || state.people.find((person) => person.name === item.assignee)?.id || null;
   return {
-    id: item.id,
+    id: recordId,
     folio: item.folio,
     fecha_recepcion: item.receivedAt,
     remitente: item.sender,
@@ -273,7 +283,7 @@ async function incomingToDb(item) {
     fecha_respuesta: item.responseAt || null,
     respuesta_documento_url: uploadedResponseDocument?.path || item.responseDocument?.path || null,
     respuesta_documento_nombre: uploadedResponseDocument?.name || item.responseDocument?.name || null,
-    asignado_a: assigneeId,
+    asignado_a: supabaseOptionalUuid(assigneeId),
     fecha_limite: item.dueAt || null,
     creado_en: item.createdAt || new Date().toISOString(),
   };
@@ -297,14 +307,14 @@ function outgoingToApp(row) {
 function outgoingToDb(item) {
   const authorId = item.authorId || state.people.find((person) => person.name === item.author)?.id || null;
   return {
-    id: item.id,
+    id: supabaseRecordId(item.id),
     numero: item.number,
     numero_completo: item.fullNumber,
     prefijo: item.prefix,
     fecha: item.createdAt,
     destinatario: item.recipient,
     asunto: item.subject,
-    elaboro: authorId,
+    elaboro: supabaseOptionalUuid(authorId),
   };
 }
 
@@ -429,7 +439,7 @@ async function supabasePut(store, value) {
       p_fecha: value.createdAt,
       p_destinatario: value.recipient,
       p_asunto: value.subject,
-      p_elaboro: authorId,
+      p_elaboro: supabaseOptionalUuid(authorId),
     });
     if (error) throw error;
     return data;
@@ -859,7 +869,9 @@ function showMessage(message, type = "info") {
 }
 
 function describeError(error) {
-  return error?.message || String(error);
+  if (!error) return "Error desconocido";
+  const parts = [error.message, error.details, error.hint, error.code].filter(Boolean);
+  return parts.length ? parts.join(" ") : String(error);
 }
 
 function showAuthScreen(show) {
@@ -1384,17 +1396,29 @@ function bindInstallPrompt() {
   let deferredPrompt;
   const installBtn = $("#installBtn");
   if (!installBtn) return;
+  const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
+  if (isStandalone) {
+    installBtn.hidden = true;
+    return;
+  }
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     deferredPrompt = event;
     installBtn.hidden = false;
   });
   installBtn.addEventListener("click", async () => {
-    if (!deferredPrompt) return;
+    if (!deferredPrompt) {
+      showMessage("Para instalar: en Android/Chrome usa menu > Instalar app. En iPhone/Safari usa Compartir > Agregar a pantalla de inicio.", "info");
+      return;
+    }
     deferredPrompt.prompt();
     await deferredPrompt.userChoice;
     deferredPrompt = null;
     installBtn.hidden = true;
+  });
+  window.addEventListener("appinstalled", () => {
+    installBtn.hidden = true;
+    showMessage("App instalada correctamente.", "success");
   });
 }
 

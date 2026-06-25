@@ -91,6 +91,10 @@ function openDb() {
 }
 
 async function detectApi() {
+  if (isSupabaseConfigured()) {
+    apiOnline = false;
+    return;
+  }
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
     apiOnline = response.ok;

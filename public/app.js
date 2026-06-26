@@ -7,7 +7,8 @@ const STORES = ["incoming", "outgoing", "people", "settings"];
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 const XLSX_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
-const DEFAULT_ADMIN_DELETE_KEY = "1234";
+const DEFAULT_ADMIN_DELETE_KEY = "dpydu";
+const LOCAL_NOTIFICATION_SETTINGS_KEY = "oficios-notification-settings";
 const DEFAULT_SETTINGS = {
   nextNumber: 1,
   directorEmail: "dir.planeacionydu@gmail.com",
@@ -351,6 +352,41 @@ function settingsToDb(settings) {
   };
 }
 
+function legacySettingsToDb(settings) {
+  return {
+    id: settings.id || "main",
+    siguiente_numero: settings.nextNumber,
+    correo_director: settings.directorEmail,
+  };
+}
+
+function isSchemaCacheColumnError(error) {
+  return error?.code === "PGRST204" || /schema cache|column/i.test(error?.message || "");
+}
+
+function loadLocalNotificationSettings() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(LOCAL_NOTIFICATION_SETTINGS_KEY) || "{}");
+    return {
+      directorPhone: settings.directorPhone || "",
+      notifyEmail: settings.notifyEmail ?? true,
+      notifyWhatsapp: settings.notifyWhatsapp ?? false,
+      notifySystem: settings.notifySystem ?? true,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalNotificationSettings(settings) {
+  localStorage.setItem(LOCAL_NOTIFICATION_SETTINGS_KEY, JSON.stringify({
+    directorPhone: settings.directorPhone || "",
+    notifyEmail: Boolean(settings.notifyEmail),
+    notifyWhatsapp: Boolean(settings.notifyWhatsapp),
+    notifySystem: Boolean(settings.notifySystem),
+  }));
+}
+
 function safeFilename(value) {
   return String(value || "documento")
     .normalize("NFD")
@@ -474,6 +510,21 @@ async function supabasePut(store, value) {
   if (store === "settings") {
     requireRole("admin", "director");
     payload = settingsToDb(value);
+    const { data, error } = await supabase
+      .from(SUPABASE_TABLES.settings)
+      .upsert(payload)
+      .select()
+      .single();
+    if (!error) return data;
+    if (!isSchemaCacheColumnError(error)) throw error;
+    console.warn("Configuracion con esquema anterior; se guardan preferencias nuevas localmente.", error.message);
+    const fallback = await supabase
+      .from(SUPABASE_TABLES.settings)
+      .upsert(legacySettingsToDb(value))
+      .select()
+      .single();
+    if (fallback.error) throw fallback.error;
+    return fallback.data;
   }
 
   const { data, error } = await supabase
@@ -610,7 +661,11 @@ async function loadState() {
     getAll("settings"),
   ]);
   state.people = people.sort((a, b) => a.name.localeCompare(b.name));
-  state.settings = { ...DEFAULT_SETTINGS, ...(settingsRows.find((row) => row.id === "main") || state.settings) };
+  state.settings = {
+    ...DEFAULT_SETTINGS,
+    ...(settingsRows.find((row) => row.id === "main") || state.settings),
+    ...loadLocalNotificationSettings(),
+  };
   if (!state.people.length) {
     await seedPeople();
     state.people = await getAll("people");
@@ -819,9 +874,8 @@ function fillSelects() {
 function buildDirectorEmail(item) {
   const subject = encodeURIComponent(`Nuevo oficio recibido: ${item.folio}`);
   const body = encodeURIComponent([
-    "Director:",
+    "Director le ecribo este mensaje para informarque que se recibio el oficio siguiente:",
     "",
-    `Oficio recibido.`,
     `Folio: ${item.folio}`,
     `Fecha de recepcion: ${item.receivedAt}`,
     `Remitente: ${item.sender}`,
@@ -829,7 +883,7 @@ function buildDirectorEmail(item) {
     `Asunto: ${item.subject}`,
     item.notes ? `Observaciones: ${item.notes}` : "",
     "",
-    "Favor de ingresar al sistema de oficios para su revision.",
+    "Ya se encuentra registrado en el Sistema",
   ].filter(Boolean).join("\n"));
   return `mailto:${state.settings.directorEmail}?subject=${subject}&body=${body}`;
 }
@@ -838,14 +892,16 @@ function buildDirectorWhatsapp(item) {
   const phone = whatsappPhone(state.settings.directorPhone);
   if (!phone) return "";
   const text = encodeURIComponent([
-    "Director:",
-    "Nuevo oficio recibido.",
+    "Director le ecribo este mensaje para informarque que se recibio el oficio siguiente:",
+    "",
     `Folio: ${item.folio}`,
     `Fecha de recepcion: ${item.receivedAt}`,
     `Remitente: ${item.sender}`,
     `Prioridad: ${item.priority}`,
     `Asunto: ${item.subject}`,
     item.notes ? `Observaciones: ${item.notes}` : "",
+    "",
+    "Ya se encuentra registrado en el Sistema",
   ].filter(Boolean).join("\n"));
   return `https://wa.me/${phone}?text=${text}`;
 }
@@ -1029,6 +1085,7 @@ function notifyAssignment(item) {
 }
 
 async function saveSettings() {
+  saveLocalNotificationSettings(state.settings);
   await put("settings", { id: "main", ...state.settings });
 }
 
@@ -1483,6 +1540,10 @@ function excelRows() {
       id: "main",
       siguiente_numero: state.settings.nextNumber,
       correo_director: state.settings.directorEmail,
+      telefono_director: state.settings.directorPhone,
+      notificar_correo: state.settings.notifyEmail,
+      notificar_whatsapp: state.settings.notifyWhatsapp,
+      notificar_sistema: state.settings.notifySystem,
       clave_borrado: state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY,
     }],
   };
@@ -1542,6 +1603,10 @@ function importedFromWorkbook(workbook, XLSX) {
       id: "main",
       nextNumber: Number(config.siguiente_numero) || state.settings.nextNumber,
       directorEmail: config.correo_director || state.settings.directorEmail,
+      directorPhone: config.telefono_director || state.settings.directorPhone,
+      notifyEmail: config.notificar_correo ?? state.settings.notifyEmail,
+      notifyWhatsapp: config.notificar_whatsapp ?? state.settings.notifyWhatsapp,
+      notifySystem: config.notificar_sistema ?? state.settings.notifySystem,
       adminDeleteKey: config.clave_borrado || state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY,
     },
   };

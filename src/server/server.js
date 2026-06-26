@@ -43,7 +43,7 @@ function initialData() {
     incoming: [],
     outgoing: [],
     people: [],
-    settings: [{ id: "main", nextNumber: 1, directorEmail: "director@municipio.gob.mx", adminDeleteKey: "1234" }],
+    settings: [{ id: "main", nextNumber: 1, directorEmail: "dir.planeacionydu@gmail.com", adminDeleteKey: "dpydu" }],
   };
 }
 

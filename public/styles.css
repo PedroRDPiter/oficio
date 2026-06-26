@@ -541,6 +541,20 @@ form {
   gap: 13px;
 }
 
+fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+legend {
+  margin-bottom: 8px;
+  color: #4f5e58;
+  font-size: 0.84rem;
+  font-weight: 780;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -613,6 +627,44 @@ input[type="file"]::file-selector-button {
   font: inherit;
   font-weight: 800;
   cursor: pointer;
+}
+
+.channel-options,
+.device-notifications {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.channel-options {
+  display: grid;
+  gap: 9px;
+}
+
+.channel-options label {
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.channel-options input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: var(--accent);
+}
+
+.device-notifications {
+  display: grid;
+  gap: 9px;
+}
+
+.device-notifications span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 780;
 }
 
 .field-grid {
@@ -880,6 +932,73 @@ dialog::backdrop {
   color: #8f321f;
 }
 
+.notification-center {
+  position: fixed;
+  right: 18px;
+  top: 18px;
+  z-index: 60;
+  width: min(430px, calc(100vw - 24px));
+}
+
+.notification-center[hidden] {
+  display: none;
+}
+
+.notification-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #b7d5c9;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 14px;
+  box-shadow: var(--shadow-lg);
+}
+
+.notification-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notification-heading strong,
+.notification-heading span {
+  display: block;
+}
+
+.notification-heading strong {
+  margin-top: 2px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.notification-kicker {
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.notification-card p {
+  margin: 0;
+  color: #31403b;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.notification-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 @media (hover: hover) {
   .button:hover,
   .icon-button:hover {
@@ -1032,6 +1151,11 @@ dialog::backdrop {
     right: 12px;
     bottom: 12px;
   }
+
+  .notification-center {
+    top: calc(66px + env(safe-area-inset-top));
+    right: 12px;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1150,6 +1274,17 @@ dialog::backdrop {
     left: 10px;
     right: 10px;
     max-width: none;
+  }
+
+  .notification-center {
+    left: 10px;
+    right: 10px;
+    width: auto;
+  }
+
+  .notification-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }
 

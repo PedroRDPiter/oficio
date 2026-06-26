@@ -8,6 +8,15 @@ const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 const XLSX_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
 const DEFAULT_ADMIN_DELETE_KEY = "1234";
+const DEFAULT_SETTINGS = {
+  nextNumber: 1,
+  directorEmail: "dir.planeacionydu@gmail.com",
+  directorPhone: "",
+  adminDeleteKey: DEFAULT_ADMIN_DELETE_KEY,
+  notifyEmail: true,
+  notifyWhatsapp: false,
+  notifySystem: true,
+};
 
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = () => crypto.randomUUID();
@@ -27,7 +36,7 @@ let state = {
   incoming: [],
   outgoing: [],
   people: [],
-  settings: { nextNumber: 1, directorEmail: "director@municipio.gob.mx", adminDeleteKey: DEFAULT_ADMIN_DELETE_KEY },
+  settings: { ...DEFAULT_SETTINGS },
 };
 
 const SUPABASE_TABLES = {
@@ -323,6 +332,10 @@ function settingsToApp(row) {
     id: row.id,
     nextNumber: row.siguiente_numero,
     directorEmail: row.correo_director,
+    directorPhone: row.telefono_director || "",
+    notifyEmail: row.notificar_correo ?? true,
+    notifyWhatsapp: row.notificar_whatsapp ?? false,
+    notifySystem: row.notificar_sistema ?? true,
   };
 }
 
@@ -331,6 +344,10 @@ function settingsToDb(settings) {
     id: settings.id || "main",
     siguiente_numero: settings.nextNumber,
     correo_director: settings.directorEmail,
+    telefono_director: settings.directorPhone || null,
+    notificar_correo: Boolean(settings.notifyEmail),
+    notificar_whatsapp: Boolean(settings.notifyWhatsapp),
+    notificar_sistema: Boolean(settings.notifySystem),
   };
 }
 
@@ -546,6 +563,10 @@ function whatsappPhone(value = "") {
   return phone.startsWith("52") ? phone : `52${phone}`;
 }
 
+function canUseNativeNotifications() {
+  return "Notification" in window && (window.isSecureContext || location.hostname === "localhost");
+}
+
 function getAssigneeNames(item) {
   if (Array.isArray(item.assignees) && item.assignees.length) return item.assignees.filter(Boolean);
   if (item.assignee) return [item.assignee];
@@ -589,8 +610,7 @@ async function loadState() {
     getAll("settings"),
   ]);
   state.people = people.sort((a, b) => a.name.localeCompare(b.name));
-  state.settings = settingsRows.find((row) => row.id === "main") || state.settings;
-  state.settings = { adminDeleteKey: DEFAULT_ADMIN_DELETE_KEY, ...state.settings };
+  state.settings = { ...DEFAULT_SETTINGS, ...(settingsRows.find((row) => row.id === "main") || state.settings) };
   if (!state.people.length) {
     await seedPeople();
     state.people = await getAll("people");
@@ -651,7 +671,24 @@ function renderStats() {
   $("#statNext").textContent = nextFullNumber;
   $("#nextBadge").textContent = `Siguiente ${nextFullNumber}`;
   $("#settingsForm").elements.directorEmail.value = state.settings.directorEmail;
+  $("#settingsForm").elements.directorPhone.value = state.settings.directorPhone || "";
   $("#settingsForm").elements.adminDeleteKey.value = state.settings.adminDeleteKey || "";
+  $("#settingsForm").elements.notifyEmail.checked = Boolean(state.settings.notifyEmail);
+  $("#settingsForm").elements.notifyWhatsapp.checked = Boolean(state.settings.notifyWhatsapp);
+  $("#settingsForm").elements.notifySystem.checked = Boolean(state.settings.notifySystem);
+  const deviceButton = $("#enableNotificationsBtn");
+  if (deviceButton) {
+    if (!canUseNativeNotifications()) {
+      deviceButton.textContent = "No disponible en este navegador";
+      deviceButton.disabled = true;
+    } else if (Notification.permission === "granted") {
+      deviceButton.textContent = "Notificaciones activas";
+    } else if (Notification.permission === "denied") {
+      deviceButton.textContent = "Permiso bloqueado";
+    } else {
+      deviceButton.textContent = "Activar en este dispositivo";
+    }
+  }
 }
 
 function renderPeople() {
@@ -784,7 +821,7 @@ function buildDirectorEmail(item) {
   const body = encodeURIComponent([
     "Director:",
     "",
-    `Se registro un oficio para revision.`,
+    `Oficio recibido.`,
     `Folio: ${item.folio}`,
     `Fecha de recepcion: ${item.receivedAt}`,
     `Remitente: ${item.sender}`,
@@ -792,13 +829,128 @@ function buildDirectorEmail(item) {
     `Asunto: ${item.subject}`,
     item.notes ? `Observaciones: ${item.notes}` : "",
     "",
-    "Favor de ingresar a la PWA para asignar responsable de respuesta.",
+    "Favor de ingresar al sistema de oficios para su revision.",
   ].filter(Boolean).join("\n"));
   return `mailto:${state.settings.directorEmail}?subject=${subject}&body=${body}`;
 }
 
+function buildDirectorWhatsapp(item) {
+  const phone = whatsappPhone(state.settings.directorPhone);
+  if (!phone) return "";
+  const text = encodeURIComponent([
+    "Director:",
+    "Nuevo oficio recibido.",
+    `Folio: ${item.folio}`,
+    `Fecha de recepcion: ${item.receivedAt}`,
+    `Remitente: ${item.sender}`,
+    `Prioridad: ${item.priority}`,
+    `Asunto: ${item.subject}`,
+    item.notes ? `Observaciones: ${item.notes}` : "",
+  ].filter(Boolean).join("\n"));
+  return `https://wa.me/${phone}?text=${text}`;
+}
+
+function notificationSettings() {
+  return {
+    email: Boolean(state.settings.notifyEmail),
+    whatsapp: Boolean(state.settings.notifyWhatsapp),
+    system: Boolean(state.settings.notifySystem),
+  };
+}
+
+function notificationTextForIncoming(item) {
+  return [
+    `Folio: ${item.folio}`,
+    `Remitente: ${item.sender}`,
+    `Asunto: ${item.subject}`,
+  ].join("\n");
+}
+
+function notificationTextForAssignment(item) {
+  return [
+    `Folio: ${item.folio}`,
+    `Responsable: ${getAssigneeNames(item).join(", ")}`,
+    item.dueAt ? `Limite: ${item.dueAt}` : "",
+    `Asunto: ${item.subject}`,
+  ].filter(Boolean).join("\n");
+}
+
+function ensureNotificationCenter() {
+  let center = $("#notificationCenter");
+  if (center) return center;
+  center = document.createElement("section");
+  center.id = "notificationCenter";
+  center.className = "notification-center";
+  center.setAttribute("aria-live", "polite");
+  center.innerHTML = `
+    <div class="notification-card" role="status">
+      <div class="notification-heading">
+        <div>
+          <span class="notification-kicker">Notificacion</span>
+          <strong id="notificationTitle"></strong>
+        </div>
+        <button class="icon-button" type="button" data-close-notification aria-label="Cerrar">x</button>
+      </div>
+      <p id="notificationBody"></p>
+      <div class="notification-actions" id="notificationActions"></div>
+    </div>
+  `;
+  document.body.appendChild(center);
+  return center;
+}
+
+function showNotificationPopup({ title, body, actions = [], type = "info" }) {
+  const center = ensureNotificationCenter();
+  $("#notificationTitle", center).textContent = title;
+  $("#notificationBody", center).textContent = body;
+  $("#notificationActions", center).innerHTML = actions.length
+    ? actions.map((action) => `<a class="button ${action.primary ? "primary" : "ghost"}" href="${escapeHtml(action.href)}" target="${action.target || "_self"}" rel="noopener">${escapeHtml(action.label)}</a>`).join("")
+    : `<span class="notification-empty">Sin canales disponibles. Revisa la configuracion y el directorio.</span>`;
+  center.dataset.type = type;
+  center.hidden = false;
+}
+
+async function showNativeNotification(title, body) {
+  if (!notificationSettings().system || !canUseNativeNotifications() || Notification.permission !== "granted") return;
+  const options = {
+    body,
+    icon: "icon.svg",
+    badge: "icon.svg",
+    tag: "oficios-notification",
+    data: { url: location.href },
+  };
+  try {
+    const registration = await navigator.serviceWorker?.ready;
+    if (registration?.showNotification) {
+      await registration.showNotification(title, options);
+      return;
+    }
+  } catch (error) {
+    console.warn("No se pudo usar el service worker para notificaciones:", error);
+  }
+  new Notification(title, options);
+}
+
+async function requestNativeNotifications() {
+  if (!canUseNativeNotifications()) {
+    showMessage("Este navegador no permite notificaciones del dispositivo en esta instalacion.", "error");
+    renderStats();
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  if (permission === "granted") {
+    state.settings.notifySystem = true;
+    await saveSettings();
+    await showNativeNotification("Control de Oficios", "Las notificaciones del dispositivo estan activas.");
+    showMessage("Notificaciones del dispositivo activadas.", "success");
+  } else {
+    showMessage("El permiso de notificaciones no fue concedido.", "info");
+  }
+  renderStats();
+}
+
 function openDirectorEmail(item) {
-  window.location.href = buildDirectorEmail(item);
+  notifyDirector(item);
 }
 
 function peopleForAssignees(item) {
@@ -829,18 +981,51 @@ function whatsappAssignmentLinks(item, people) {
   return people
     .map((person) => whatsappPhone(person.phone))
     .filter(Boolean)
-    .map((phone) => `https://wa.me/52${phone}?text=${text}`);
+    .map((phone) => `https://wa.me/${phone}?text=${text}`);
 }
 
 function openAssignmentNotifications(item) {
+  notifyAssignment(item);
+}
+
+function notifyDirector(item) {
+  const channels = notificationSettings();
+  const actions = [];
+  const mail = buildDirectorEmail(item);
+  const whatsapp = buildDirectorWhatsapp(item);
+  if (channels.email && state.settings.directorEmail) {
+    actions.push({ label: "Enviar correo", href: mail, primary: true });
+  }
+  if (channels.whatsapp && whatsapp) {
+    actions.push({ label: "Enviar WhatsApp", href: whatsapp, target: "_blank" });
+  }
+  const title = `Nuevo oficio: ${item.folio}`;
+  const body = notificationTextForIncoming(item);
+  showNotificationPopup({ title, body, actions, type: "success" });
+  showNativeNotification(title, body);
+}
+
+function notifyAssignment(item) {
   const people = peopleForAssignees(item);
+  const channels = notificationSettings();
+  const actions = [];
   const mail = mailtoAssignment(item, people);
   const whatsappLinks = whatsappAssignmentLinks(item, people);
-  if (mail) window.location.href = mail;
-  whatsappLinks.slice(0, 3).forEach((link) => window.open(link, "_blank", "noopener"));
-  if (!mail && !whatsappLinks.length) {
-    showMessage("Asignacion guardada. Agrega correo o WhatsApp al personal para notificar.", "info");
+  if (channels.email && mail) {
+    actions.push({ label: "Enviar correo", href: mail, primary: true });
   }
+  if (channels.whatsapp) {
+    whatsappLinks.slice(0, 4).forEach((href, index) => {
+      actions.push({ label: `WhatsApp ${index + 1}`, href, target: "_blank" });
+    });
+  }
+  if (!actions.length) {
+    showMessage("Asignacion guardada. Agrega correo o WhatsApp al personal y revisa los canales activos.", "info");
+  }
+  const title = `Oficio asignado: ${item.folio}`;
+  const body = notificationTextForAssignment(item);
+  showNotificationPopup({ title, body, actions, type: "success" });
+  showNativeNotification(title, body);
 }
 
 async function saveSettings() {
@@ -1106,7 +1291,11 @@ function bindForms() {
     try {
       const form = event.currentTarget;
       state.settings.directorEmail = form.elements.directorEmail.value.trim();
+      state.settings.directorPhone = normalizePhone(form.elements.directorPhone.value);
       state.settings.adminDeleteKey = form.elements.adminDeleteKey.value.trim() || DEFAULT_ADMIN_DELETE_KEY;
+      state.settings.notifyEmail = form.elements.notifyEmail.checked;
+      state.settings.notifyWhatsapp = form.elements.notifyWhatsapp.checked;
+      state.settings.notifySystem = form.elements.notifySystem.checked;
       await saveSettings();
       await refresh();
       showMessage("Configuracion guardada correctamente.", "success");
@@ -1114,6 +1303,8 @@ function bindForms() {
       showMessage(`No se pudo guardar la configuracion: ${describeError(error)}`, "error");
     }
   });
+
+  $("#enableNotificationsBtn")?.addEventListener("click", requestNativeNotifications);
 
   $("#assignmentForm").addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "assign") return;
@@ -1172,6 +1363,12 @@ function bindLists() {
   document.addEventListener("click", async (event) => {
     const target = event.target.closest("button");
     if (!target) return;
+
+    if (target.dataset.closeNotification !== undefined) {
+      const center = $("#notificationCenter");
+      if (center) center.hidden = true;
+      return;
+    }
 
     const incomingId = target.dataset.assign;
     if (incomingId) {

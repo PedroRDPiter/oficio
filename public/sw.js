@@ -1,4 +1,4 @@
-const CACHE_NAME = "oficios-dpdu-v17";
+const CACHE_NAME = "oficios-dpdu-v18";
 const ASSETS = [
   "/",
   "/index.html",
@@ -73,5 +73,20 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/index.html")))
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/";
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      const appClient = clientList.find((client) => new URL(client.url).origin === self.location.origin);
+      if (appClient) {
+        appClient.focus();
+        return appClient.navigate(targetUrl);
+      }
+      return clients.openWindow(targetUrl);
+    })
   );
 });

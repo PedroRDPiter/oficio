@@ -7,7 +7,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icon.svg">
-    <link rel="stylesheet" href="styles.css?v=17">
+    <link rel="stylesheet" href="styles.css?v=18">
   </head>
   <body>
     <section class="auth-screen" id="authScreen" hidden>
@@ -73,7 +73,6 @@
             <h1>Recepcion y seguimiento de oficios</h1>
           </div>
           <div class="top-actions">
-            <button class="button ghost" type="button" id="installBtn">Instalar app</button>
             <button class="button ghost" type="button" id="exportBtn">Exportar Excel</button>
             <label class="button ghost file-label">
               Importar Excel
@@ -251,6 +250,29 @@
                   <input name="directorEmail" type="email" placeholder="director@municipio.gob.mx" required>
                 </label>
                 <label>
+                  WhatsApp del director
+                  <input name="directorPhone" type="tel" inputmode="tel" placeholder="Ej. 6671234567">
+                </label>
+                <fieldset class="channel-options">
+                  <legend>Canales de notificacion</legend>
+                  <label>
+                    <input name="notifyEmail" type="checkbox">
+                    Correo
+                  </label>
+                  <label>
+                    <input name="notifyWhatsapp" type="checkbox">
+                    WhatsApp
+                  </label>
+                  <label>
+                    <input name="notifySystem" type="checkbox">
+                    Popup y dispositivo
+                  </label>
+                </fieldset>
+                <div class="device-notifications">
+                  <span>Permiso de este dispositivo</span>
+                  <button class="button soft-primary" type="button" id="enableNotificationsBtn">Activar en este dispositivo</button>
+                </div>
+                <label>
                   Clave para borrar registros
                   <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Cambia la clave inicial">
                 </label>
@@ -353,6 +375,6 @@
       </div>
     </template>
 
-    <script src="app.js?v=17" type="module"></script>
+    <script src="app.js?v=18" type="module"></script>
   </body>
 </html>

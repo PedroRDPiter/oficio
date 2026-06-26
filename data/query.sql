@@ -43,7 +43,11 @@ create table oficios_generados (
 create table configuracion (
   id text primary key,
   siguiente_numero integer not null default 1,
-  correo_director text not null default 'director@municipio.gob.mx'
+  correo_director text not null default 'director@municipio.gob.mx',
+  telefono_director text,
+  notificar_correo boolean not null default true,
+  notificar_whatsapp boolean not null default false,
+  notificar_sistema boolean not null default true
 );
 
 insert into configuracion (id, siguiente_numero, correo_director)

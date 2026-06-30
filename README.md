@@ -14,7 +14,8 @@ public/                 Archivos de la PWA servidos al navegador
   icon.svg
 src/server/             Servidor Node.js y API
   server.js
-data/                   Base local JSON
+data/                   Migraciones SQL y base JSON de respaldo
+  migrations/
   oficios-data.json
 storage/documentos/     Escaneos y PDFs subidos
 scripts/                Utilidades para Windows
@@ -29,6 +30,47 @@ npm start
 
 Tambien puedes usar `scripts/iniciar-servidor.bat` en Windows.
 
+## PostgreSQL Local
+
+Esta version puede guardar en PostgreSQL local. Si no configuras PostgreSQL, el servidor conserva el respaldo en `data/oficios-data.json`.
+
+1. Instala dependencias:
+
+```bash
+npm install
+```
+
+2. Crea la base de datos en PostgreSQL. Si `psql` no esta en tu PATH, usa la ruta completa:
+
+```powershell
+& "C:\Program Files\PostgreSQL\18\bin\createdb.exe" -U postgres oficios
+```
+
+Si la base ya existe, este paso puede marcar error y puedes continuar.
+
+3. Copia `.env.example` a `.env` y ajusta la contrasena:
+
+```txt
+DATABASE_URL=postgresql://postgres:TU_PASSWORD@localhost:5432/oficios
+PORT=3344
+HOST=0.0.0.0
+PUBLIC_BASE_URL=http://localhost:3344
+```
+
+4. Ejecuta la migracion:
+
+```bash
+npm run db:migrate
+```
+
+5. Abre el servidor local:
+
+```bash
+npm start
+```
+
+En esta PC abre `http://localhost:3344/`. En otros equipos de la misma red usa la IP que imprime el servidor, por ejemplo `http://192.168.1.50:3344/`.
+
 ## Variables de entorno
 
 - `PORT`: puerto del servidor. En nube normalmente lo define el proveedor.
@@ -38,6 +80,8 @@ Tambien puedes usar `scripts/iniciar-servidor.bat` en Windows.
 - `MAX_UPLOAD_BYTES`: limite de subida. Por defecto 25 MB.
 - `PUBLIC_BASE_URL`: URL desde donde otros equipos descargan documentos del servidor local.
 - `ALLOWED_ORIGIN`: origen permitido para subir documentos desde Netlify. Puede ser tu URL `https://sitio.netlify.app`.
+- `DATABASE_URL`: conexion a PostgreSQL local, por ejemplo `postgresql://postgres:password@localhost:5432/oficios`.
+- `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`: alternativa a `DATABASE_URL`.
 
 ## Nube
 

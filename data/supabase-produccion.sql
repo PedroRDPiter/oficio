@@ -194,7 +194,7 @@ on storage.objects for insert
 to authenticated
 with check (
   bucket_id = 'documentos'
-  and public.mi_rol() in ('admin', 'director', 'ventanilla')
+  and public.mi_rol() in ('admin', 'director', 'ventanilla', 'responsable')
 );
 
 create policy "documentos_update"
@@ -202,11 +202,11 @@ on storage.objects for update
 to authenticated
 using (
   bucket_id = 'documentos'
-  and public.mi_rol() in ('admin', 'director', 'ventanilla')
+  and public.mi_rol() in ('admin', 'director', 'ventanilla', 'responsable')
 )
 with check (
   bucket_id = 'documentos'
-  and public.mi_rol() in ('admin', 'director', 'ventanilla')
+  and public.mi_rol() in ('admin', 'director', 'ventanilla', 'responsable')
 );
 
 create policy "documentos_delete"

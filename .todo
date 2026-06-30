@@ -1,0 +1,64 @@
+# Mejoras propuestas para Control de Oficios
+
+## Prioridad alta
+
+- [x] Exigir autenticacion en la API local. Actualmente `API_TOKEN` es opcional y, si no existe, cualquier cliente de la red puede leer, modificar o borrar registros y documentos desde `/api/*`.
+- [x] No publicar credenciales reales en ejemplos. Revisar `.env.example` porque incluye una `DATABASE_URL` con usuario y contrasena concreta; dejar solo placeholders seguros.
+- [x] Unificar la generacion de consecutivos en PostgreSQL local. El cliente calcula `nextOutgoingNumber`, pero la base ya tiene `generar_oficio_local`; usar una ruta API transaccional evita duplicados cuando dos equipos generan oficios al mismo tiempo.
+- [x] Corregir la ruta `/api/outgoing-word/:id`. El servidor tiene funciones para generar DOCX con datos, pero la ruta actualmente descarga la plantilla sin inyectar numero, destinatario o asunto.
+- [x] Reemplazar la clave fija de borrado `dpydu` por permisos reales o una clave configurable no expuesta al cliente. En modo local la clave vive en `public/app.js`, por lo que no protege de forma efectiva.
+- [x] Agregar manejo de errores de JSON y validacion de payloads en el servidor. Varias rutas hacen `JSON.parse` directo y pueden responder 500 ante entradas malformadas.
+
+## Seguridad y datos
+
+- [x] Cerrar CORS por defecto. `ALLOWED_ORIGIN=*` facilita pruebas, pero en red/local/produccion conviene limitarlo al origen real de la app.
+- [x] Validar y normalizar campos requeridos en servidor, no solo en formularios: fechas, folios, remitente, asunto, prefijos, estados y prioridades.
+- [x] Evitar sobrescritura accidental de documentos. `saveDocumentFile` usa `ownerId-originalName`; si se sube otro archivo con el mismo nombre para el mismo registro, reemplaza el anterior.
+- [x] Registrar auditoria minima para altas, cambios y borrados: usuario o equipo, fecha, entidad, accion y valores clave.
+- [ ] Definir politica de respaldo para `data/oficios-data.json` y `storage/documentos`, incluyendo exportacion automatica o copia programada.
+- [x] Revisar permisos de Supabase Storage para responsables. Hoy la insercion de documentos esta limitada a admin/director/ventanilla, pero un responsable puede necesitar subir respuesta.
+
+## Sincronizacion y modo offline
+
+- [ ] Resolver estrategia de sincronizacion entre IndexedDB, API local y Supabase. Ahora son modos alternos; si alguien captura offline, no hay cola de sincronizacion posterior.
+- [x] Mostrar estado de guardado/sincronizacion por registro para evitar dudas sobre si ya quedo en servidor o solo local.
+- [ ] Agregar cola de reintentos para documentos grandes o conexiones inestables.
+- [x] Evitar refresco automatico mientras hay cambios sin guardar. Ya se evita durante edicion activa, pero conviene detectar formularios con contenido antes de refrescar.
+- [x] Versionar datos importados/exportados para poder migrar respaldos de Excel/JSON cuando cambie el esquema.
+
+## Mantenibilidad
+
+- [ ] Dividir `public/app.js` en modulos: almacenamiento, Supabase, render, formularios, notificaciones, import/export y utilidades.
+- [ ] Compartir mapeadores entre cliente y servidor o documentar claramente sus diferencias. Hay conversiones duplicadas para `incoming`, `outgoing`, `people` y `settings`.
+- [ ] Extraer constantes compartidas: estados, prioridades, prefijos, tipos MIME, limites de archivo y configuracion por defecto.
+- [x] Eliminar ramas redundantes, por ejemplo el `if (supabaseOnline) await put(...) else await put(...)` en el formulario de expedidos.
+- [ ] Revisar `innerHTML` en renders grandes. Aunque se usa `escapeHtml` en muchos puntos, conviene centralizar helpers de plantillas para reducir riesgo de XSS.
+- [ ] Automatizar versionado de cache del service worker en vez de actualizar manualmente `oficios-dpdu-v38` y `app.js?v=38`.
+
+## Experiencia de usuario
+
+- [ ] Agregar busqueda avanzada por rango de fechas, remitente/destinatario, folio, responsable y vencimiento.
+- [ ] Permitir editar registros existentes desde la interfaz, no solo registrar, asignar, responder o borrar.
+- [ ] Mostrar historial de asignaciones y respuestas por oficio.
+- [ ] Mejorar confirmaciones de borrado con un dialog propio y contexto del registro; `prompt`/`confirm` nativos son poco claros en movil.
+- [ ] Agregar vista de detalle de oficio con documento, seguimiento, responsable, fechas y acciones principales en un solo lugar.
+- [ ] Permitir descargar respaldo completo con documentos, no solo datos Excel.
+- [ ] Agregar indicadores visuales para documentos faltantes, vencidos y respuestas incompletas.
+- [ ] Revisar textos sin acentos si se desea una interfaz final mas pulida en espanol.
+
+## Pruebas y calidad
+
+- [ ] Agregar pruebas unitarias para consecutivos por prefijo/anio, normalizacion de telefonos, filtros, fechas de vencimiento y conversiones app/base de datos.
+- [ ] Agregar pruebas de integracion para API local: CRUD, carga de documentos, rutas protegidas, CORS y errores de payload.
+- [ ] Agregar una prueba de concurrencia para generacion de oficios en PostgreSQL.
+- [ ] Agregar pruebas E2E basicas con Playwright: registrar recibido, asignar responsable, guardar respuesta, generar expedido, exportar Excel.
+- [x] Ejecutar `npm run check` en CI o en un hook antes de despliegue.
+- [ ] Agregar lint/format para mantener estilo consistente conforme crezca el proyecto.
+
+## Despliegue y documentacion
+
+- [ ] Documentar claramente los tres modos de ejecucion: local puro, servidor local PostgreSQL y Supabase/Netlify.
+- [ ] Documentar variables obligatorias y recomendadas: `API_TOKEN`, `ALLOWED_ORIGIN`, `PUBLIC_BASE_URL`, `DATABASE_URL`, `PGSSL`, `MAX_UPLOAD_BYTES`.
+- [ ] Agregar guia de instalacion de PostgreSQL local y migracion desde JSON/Excel.
+- [ ] Agregar checklist de despliegue seguro para red local: firewall, puerto, token, respaldo y permisos de carpeta `storage`.
+- [ ] Alinear `README.md`, `.env.example`, scripts `.bat` y `render.yaml` para que describan el mismo flujo recomendado.

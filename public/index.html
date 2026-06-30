@@ -7,7 +7,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="icon.svg">
-    <link rel="stylesheet" href="styles.css?v=19">
+    <link rel="stylesheet" href="styles.css?">
   </head>
   <body>
     <section class="auth-screen" id="authScreen" hidden>
@@ -54,6 +54,10 @@
           <button class="tab" type="button" data-view="outgoing">
             <span aria-hidden="true">#</span>
             Expedidos
+          </button>
+          <button class="tab" type="button" data-view="calendar">
+            <span aria-hidden="true">CA</span>
+            Actividades
           </button>
           <button class="tab" type="button" data-view="directory">
             <span aria-hidden="true">PE</span>
@@ -175,6 +179,22 @@
                     <option>Asignado</option>
                     <option>Respondido</option>
                   </select>
+                  <select id="priorityFilter" aria-label="Filtrar prioridad">
+                    <option value="">Todas las prioridades</option>
+                    <option>Normal</option>
+                    <option>Alta</option>
+                    <option>Urgente</option>
+                  </select>
+                  <select id="assigneeFilter" aria-label="Filtrar responsable">
+                    <option value="">Todos los responsables</option>
+                  </select>
+                  <select id="dueFilter" aria-label="Filtrar vencimiento">
+                    <option value="">Todos los vencimientos</option>
+                    <option value="overdue">Vencidos</option>
+                    <option value="today">Vencen hoy</option>
+                    <option value="week">Proximos 7 dias</option>
+                    <option value="none">Sin fecha limite</option>
+                  </select>
                 </div>
               </div>
               <div class="record-list" id="incomingList" aria-live="polite"></div>
@@ -193,14 +213,16 @@
               <div class="field-grid">
                 <label>
                   Prefijo
-                  <input name="prefix" value="DPDU" maxlength="12" autocomplete="off" autocapitalize="characters" list="prefixOptions" required>
-                  <datalist id="prefixOptions">
-                    <option value="DPDU"></option>
-                    <option value="MR"></option>
-                    <option value="PM"></option>
-                    <option value="DU"></option>
-                    <option value="OP"></option>
-                  </datalist>
+                  <select name="prefix" id="prefixSelect" class="prefix-select" required>
+                    <option value="DPDU">DPDU</option>
+                    <option value="CFAGU">CFAGU</option>
+                    <option value="IP">IP</option>
+                    <option value="PP">PP</option>
+                    <option value="MR">MR</option>
+                    <option value="PYSP">PYSP</option>
+                    <option value="DU">DU</option>
+                    <option value="OP">OP</option>
+                  </select>
                 </label>
                 <label>
                   Fecha
@@ -223,19 +245,59 @@
                 <select name="author" id="authorSelect"></select>
               </label>
 
+              <label>
+                Guardar oficio firmado o borrador
+                <input name="document" type="file" accept=".pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+              </label>
+
               <div class="form-actions">
-                <button class="button primary" type="submit">Asignar consecutivo</button>
+                <button class="button primary" type="submit">Asignar y guardar oficio</button>
               </div>
             </form>
 
             <section class="panel list-panel">
               <div class="panel-heading">
                 <h2>Oficios generados</h2>
-                <input id="searchOutgoing" type="search" placeholder="Buscar consecutivo">
+                <div class="filters">
+                  <input id="searchOutgoing" type="search" placeholder="Buscar consecutivo">
+                  <select id="prefixFilter" aria-label="Filtrar prefijo">
+                    <option value="">Todos los prefijos</option>
+                  </select>
+                  <select id="authorFilter" aria-label="Filtrar responsable">
+                    <option value="">Todos los responsables</option>
+                  </select>
+                </div>
               </div>
               <div class="record-list" id="outgoingList" aria-live="polite"></div>
             </section>
           </div>
+        </section>
+
+        <section class="view" id="view-calendar">
+          <section class="panel calendar-panel" aria-label="Calendario de actividades">
+            <div class="panel-heading calendar-toolbar">
+              <div>
+                <h2>Calendario de actividades</h2>
+                <span class="subtle-text">Vencimientos por responsable con colores de usuario</span>
+              </div>
+              <div class="calendar-controls">
+                <button class="button ghost" type="button" id="calendarPrev">Anterior</button>
+                <strong id="calendarTitle">Mes</strong>
+                <button class="button ghost" type="button" id="calendarNext">Siguiente</button>
+                <button class="button soft-primary" type="button" id="calendarToday">Hoy</button>
+              </div>
+            </div>
+            <div class="calendar-legend" id="calendarLegend"></div>
+            <div class="month-calendar" id="monthCalendar" aria-live="polite"></div>
+          </section>
+
+          <section class="panel calendar-panel" aria-label="Proximas actividades">
+            <div class="panel-heading">
+              <h2>Proximas respuestas</h2>
+              <span class="badge">Alertas 3d - 2d - 1d - 12h - 6h - 1h</span>
+            </div>
+            <div class="calendar-list" id="calendarList" aria-live="polite"></div>
+          </section>
         </section>
 
         <section class="view" id="view-directory">
@@ -274,7 +336,7 @@
                 </div>
                 <label>
                   Clave para borrar registros
-                  <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Cambia la clave inicial">
+                  <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Clave protegida" readonly>
                 </label>
                 <div class="form-actions">
                   <button class="button primary" type="submit">Guardar configuracion</button>
@@ -325,10 +387,11 @@
           <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">x</button>
         </div>
         <input type="hidden" name="id">
-        <label>
-          Responsables
-          <select name="assignee" multiple required></select>
-        </label>
+        <fieldset class="assignee-picker">
+          <legend>Responsables</legend>
+          <p class="field-hint">Selecciona una o varias personas que daran respuesta.</p>
+          <div class="assignee-list" id="assigneeChecklist"></div>
+        </fieldset>
         <label>
           Fecha limite
           <input name="dueAt" type="date">
@@ -375,6 +438,6 @@
       </div>
     </template>
 
-    <script src="app.js?v=19" type="module"></script>
+    <script src="app.js?v=38" type="module"></script>
   </body>
 </html>

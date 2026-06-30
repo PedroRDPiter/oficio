@@ -1,4 +1,4 @@
-const CACHE_NAME = "oficios-dpdu-v19";
+const CACHE_NAME = "oficios-dpdu-v38";
 const ASSETS = [
   "/",
   "/index.html",

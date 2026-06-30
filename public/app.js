@@ -3,36 +3,79 @@ import { LOCAL_DOCUMENT_SERVER_URL, SUPABASE_ANON_KEY, SUPABASE_DOCUMENT_BUCKET,
 
 const DB_NAME = "oficios-pwa";
 const DB_VERSION = 1;
+const DATA_SCHEMA_VERSION = 1;
 const STORES = ["incoming", "outgoing", "people", "settings"];
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
-const ALLOWED_DOCUMENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_DOCUMENT_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
 const XLSX_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
-const DEFAULT_ADMIN_DELETE_KEY = "dpydu";
+const LOCAL_API_TOKEN_KEY = "oficios-local-api-token";
 const LOCAL_NOTIFICATION_SETTINGS_KEY = "oficios-notification-settings";
+const REMINDER_STATE_KEY = "oficios-reminders-shown";
+const PREFIX_OPTIONS = [
+  { value: "DPDU", label: "DPDU", color: "#00a878" },
+  { value: "CFAGU", label: "CFAGU", color: "#1e88ff" },
+  { value: "IP", label: "IP", color: "#ffb000" },
+  { value: "PP", label: "PP", color: "#ff4f7b" },
+  { value: "MR", label: "MR", color: "#7c5cff" },
+  { value: "PYSP", label: "PYSP", color: "#00bcd4" },
+  { value: "DU", label: "DU", color: "#6cc24a" },
+  { value: "OP", label: "OP", color: "#ff7a1a" },
+];
+const REMINDER_WINDOWS = [
+  { key: "3d", label: "3 dias", hours: 72 },
+  { key: "2d", label: "2 dias", hours: 48 },
+  { key: "1d", label: "1 dia", hours: 24 },
+  { key: "12h", label: "12 horas", hours: 12 },
+  { key: "6h", label: "6 horas", hours: 6 },
+  { key: "1h", label: "1 hora", hours: 1 },
+];
 const DEFAULT_SETTINGS = {
   nextNumber: 1,
   directorEmail: "dir.planeacionydu@gmail.com",
   directorPhone: "",
-  adminDeleteKey: DEFAULT_ADMIN_DELETE_KEY,
+  adminDeleteKey: "",
   notifyEmail: true,
   notifyWhatsapp: false,
   notifySystem: true,
 };
 
 const today = () => new Date().toISOString().slice(0, 10);
-const uid = () => crypto.randomUUID();
+const uid = () => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 let db;
 let apiOnline = false;
+let apiStorage = "local";
 let supabaseOnline = false;
 let supabaseStatus = "not-configured";
 let supabase = null;
 let currentUser = null;
 let currentProfile = null;
 let particleCleanup = null;
+let calendarCursor = new Date(`${today()}T00:00:00`);
 let state = {
   incoming: [],
   outgoing: [],
@@ -102,15 +145,17 @@ function openDb() {
 }
 
 async function detectApi() {
-  if (isSupabaseConfigured()) {
-    apiOnline = false;
-    return;
-  }
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
-    apiOnline = response.ok;
+    apiOnline = false;
+    if (response.ok) {
+      const health = await response.json();
+      apiStorage = health.storage || "local";
+      apiOnline = health.authConfigured !== false;
+    }
   } catch {
     apiOnline = false;
+    apiStorage = "local";
   }
 }
 
@@ -122,6 +167,10 @@ function renderConnectionMode() {
     return;
   }
   if (supabaseStatus === "not-configured") {
+    if (apiOnline) {
+      note.innerHTML = "<strong>Servidor activo</strong><span>Los registros y documentos se guardan en el servidor local.</span>";
+      return;
+    }
     note.innerHTML = "<strong>Supabase sin configurar</strong><span>Faltan variables de entorno en Netlify o no corrio el build.</span>";
     return;
   }
@@ -150,13 +199,45 @@ function requireRole(...roles) {
 }
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  const requestOptions = {
     ...options,
+    headers: apiHeaders(options.headers),
+  };
+  const response = await fetch(path, {
+    ...requestOptions,
   });
+  if (response.status === 401 && promptForLocalApiToken()) {
+    const retry = await fetch(path, {
+      ...requestOptions,
+      headers: apiHeaders(options.headers),
+    });
+    if (!retry.ok) throw new Error(`Error del servidor ${retry.status}`);
+    if (retry.status === 204) return null;
+    return retry.json();
+  }
   if (!response.ok) throw new Error(`Error del servidor ${response.status}`);
   if (response.status === 204) return null;
   return response.json();
+}
+
+function localApiToken() {
+  return localStorage.getItem(LOCAL_API_TOKEN_KEY) || "";
+}
+
+function apiHeaders(headers = {}) {
+  const token = localApiToken();
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...headers,
+  };
+}
+
+function promptForLocalApiToken() {
+  const token = window.prompt("Token de acceso del servidor local:");
+  if (!token) return false;
+  localStorage.setItem(LOCAL_API_TOKEN_KEY, token.trim());
+  return true;
 }
 
 function tx(store, mode = "readonly") {
@@ -186,6 +267,17 @@ function put(store, value) {
     request.onsuccess = () => resolve(value);
     request.onerror = () => reject(request.error);
   });
+}
+
+function createOutgoing(value) {
+  if (supabaseOnline) return supabasePut("outgoing", value);
+  if (apiOnline) {
+    return apiRequest("/api/outgoing", {
+      method: "POST",
+      body: JSON.stringify(value),
+    });
+  }
+  return put("outgoing", value);
 }
 
 function remove(store, id) {
@@ -387,6 +479,18 @@ function saveLocalNotificationSettings(settings) {
   }));
 }
 
+function loadReminderState() {
+  try {
+    return JSON.parse(localStorage.getItem(REMINDER_STATE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveReminderState(value) {
+  localStorage.setItem(REMINDER_STATE_KEY, JSON.stringify(value));
+}
+
 function safeFilename(value) {
   return String(value || "documento")
     .normalize("NFD")
@@ -396,13 +500,30 @@ function safeFilename(value) {
     .slice(0, 120) || "documento";
 }
 
+function fileExtension(name = "") {
+  const match = String(name).match(/\.([a-zA-Z0-9]{1,12})$/);
+  return match ? `.${match[1].toLowerCase()}` : "";
+}
+
+function oficioDownloadName(fullNumber, fallbackName = "oficio.docx") {
+  const baseName = safeFilename(fullNumber || "oficio");
+  const extension = fileExtension(fallbackName) || ".docx";
+  return `${baseName}${extension}`;
+}
+
+function basenameWithoutExtension(name = "") {
+  const safeName = safeFilename(name);
+  const extension = fileExtension(safeName);
+  return extension ? safeName.slice(0, -extension.length) : safeName;
+}
+
 function assertValidDocument(file) {
   if (!file) return;
   if (file.size > MAX_DOCUMENT_BYTES) {
     throw new Error("El documento supera el limite de 10 MB.");
   }
   if (!ALLOWED_DOCUMENT_TYPES.has(file.type)) {
-    throw new Error("Solo se permiten PDF, JPG, PNG o WebP.");
+    throw new Error("Solo se permiten PDF, Word, JPG, PNG o WebP.");
   }
 }
 
@@ -411,41 +532,72 @@ function safeDocumentHref(value) {
   try {
     const url = new URL(value, window.location.origin);
     if (["https:", "http:", "blob:"].includes(url.protocol)) return value;
-    if (url.protocol === "data:" && /^data:(application\/pdf|image\/(jpeg|png|webp));/i.test(value)) return value;
+    if (url.protocol === "data:" && /^data:(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|image\/(jpeg|png|webp));/i.test(value)) return value;
   } catch {
     return "";
   }
   return "";
 }
 
+function localDocumentServerBase() {
+  if (LOCAL_DOCUMENT_SERVER_URL) return LOCAL_DOCUMENT_SERVER_URL.replace(/\/$/, "");
+  if (apiOnline) return "";
+  return "";
+}
+
+function outgoingWordHref(item) {
+  const base = localDocumentServerBase();
+  return `${base}/api/outgoing-word/${encodeURIComponent(item.id)}`;
+}
+
+async function downloadOutgoingWord(item) {
+  const response = await fetch(outgoingWordHref(item), { headers: apiHeaders() });
+  if (!response.ok) throw new Error(`No se pudo descargar el oficio (${response.status}).`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = oficioDownloadName(item.fullNumber, "oficio.docx");
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function uploadLocalDocument(documentRecord, ownerId, folderName) {
+  if (!documentRecord?.dataUrl) return documentRecord || null;
+  const base = localDocumentServerBase();
+  const response = await fetch(`${base}/api/documents`, {
+    method: "POST",
+    headers: apiHeaders(),
+    body: JSON.stringify({
+      document: documentRecord,
+      ownerId,
+      folderName,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`No se pudo guardar el documento local (${response.status}).`);
+  }
+  return response.json();
+}
+
 async function uploadSupabaseDocument(documentRecord, ownerId, folderName) {
   if (!documentRecord?.dataUrl) return documentRecord || null;
-  if (LOCAL_DOCUMENT_SERVER_URL) {
-    const response = await fetch(`${LOCAL_DOCUMENT_SERVER_URL.replace(/\/$/, "")}/api/documents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        document: documentRecord,
-        ownerId,
-        folderName,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`No se pudo guardar el documento local (${response.status}).`);
-    }
-    return response.json();
-  }
+  if (localDocumentServerBase() || apiOnline) return uploadLocalDocument(documentRecord, ownerId, folderName);
 
   const response = await fetch(documentRecord.dataUrl);
   const blob = await response.blob();
   const year = new Date().getFullYear();
-  const filename = `${ownerId}-${safeFilename(documentRecord.name)}`;
+  const extension = fileExtension(documentRecord.name);
+  const baseName = safeFilename(`${ownerId}-${basenameWithoutExtension(documentRecord.name)}`);
+  const filename = `${baseName}-${Date.now()}-${uid().slice(0, 8)}${extension}`;
   const path = `${folderName}/${year}/${filename}`;
   const { error } = await supabase.storage
     .from(SUPABASE_DOCUMENT_BUCKET)
     .upload(path, blob, {
       contentType: documentRecord.type || blob.type || "application/octet-stream",
-      upsert: true,
+      upsert: false,
     });
   if (error) throw error;
   return {
@@ -577,6 +729,15 @@ function normalizePrefix(value = "") {
   return String(value || "DPDU").trim().toUpperCase() || "DPDU";
 }
 
+function prefixOption(value = "") {
+  const prefix = normalizePrefix(value);
+  return PREFIX_OPTIONS.find((item) => item.value === prefix) || { value: prefix, label: prefix, color: "#e056fd" };
+}
+
+function prefixStyle(value = "") {
+  return `--prefix-color: ${prefixOption(value).color}`;
+}
+
 function outgoingYear(value) {
   return new Date(`${value || today()}T00:00:00`).getFullYear();
 }
@@ -624,15 +785,68 @@ function getAssigneeNames(item) {
   return [];
 }
 
-function getAdminDeleteKey() {
-  return state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY;
+function dueDateTime(item) {
+  if (!item.dueAt) return null;
+  const date = new Date(`${item.dueAt}T23:59:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dueSummary(item) {
+  const due = dueDateTime(item);
+  if (!due || item.status === "Respondido") return "";
+  const diffMs = due.getTime() - Date.now();
+  const absHours = Math.abs(diffMs) / 36e5;
+  const days = Math.floor(absHours / 24);
+  const hours = Math.ceil(absHours % 24);
+  if (diffMs < 0) return `Vencido hace ${days ? `${days} d ` : ""}${hours} h`;
+  if (days > 0) return `Vence en ${days} d ${hours} h`;
+  return `Vence en ${Math.max(1, Math.ceil(absHours))} h`;
+}
+
+function dueClass(item) {
+  const due = dueDateTime(item);
+  if (!due || item.status === "Respondido") return "";
+  const hours = (due.getTime() - Date.now()) / 36e5;
+  if (hours < 0) return " overdue";
+  if (hours <= 24) return " urgent";
+  if (hours <= 72) return " soon";
+  return "";
+}
+
+function hashString(value = "") {
+  return [...String(value)].reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0);
+}
+
+function userColor(name = "") {
+  const palette = ["#245b4e", "#3d6f92", "#946714", "#8f321f", "#455a64", "#5b4b8a", "#2f7f71", "#7a5428", "#276678", "#7b3f61"];
+  const index = Math.abs(hashString(name || "Sin asignar")) % palette.length;
+  return palette[index];
+}
+
+function itemAssigneeColor(item) {
+  return userColor(getAssigneeNames(item)[0] || "Sin asignar");
+}
+
+function dateOnly(value) {
+  return new Date(`${value || today()}T00:00:00`);
+}
+
+function matchesDueFilter(item, filter) {
+  if (!filter) return true;
+  if (filter === "none") return !item.dueAt;
+  if (!item.dueAt) return false;
+  const due = dateOnly(item.dueAt);
+  const now = dateOnly(today());
+  const diffDays = Math.round((due.getTime() - now.getTime()) / 86400000);
+  if (filter === "overdue") return diffDays < 0 && item.status !== "Respondido";
+  if (filter === "today") return diffDays === 0;
+  if (filter === "week") return diffDays >= 0 && diffDays <= 7;
+  return true;
 }
 
 function confirmAdminDelete() {
-  const key = window.prompt("Clave de administrador para borrar:");
-  if (key === null) return false;
-  if (key !== getAdminDeleteKey()) {
-    showMessage("Clave de administrador incorrecta.", "error");
+  if (!hasRole("admin", "director")) {
+    showMessage("No tienes permisos para borrar este registro.", "error");
     return false;
   }
   return window.confirm("Esta accion borrara el registro. Deseas continuar?");
@@ -682,7 +896,7 @@ async function loadState() {
 async function seedPeople() {
   const starter = [
     { id: uid(), name: "Director", role: "Director de Planeacion y Desarrollo Urbano", email: state.settings.directorEmail },
-    { id: uid(), name: "Ventanilla", role: "Recepcion documental", email: "" },
+    { id: uid(), name: "Ventanilla", role: "Recepción documental", email: "" },
     { id: uid(), name: "Tecnico de Desarrollo Urbano", role: "Respuesta tecnica", email: "" },
   ];
   await Promise.all(starter.map((person) => put("people", person)));
@@ -693,6 +907,7 @@ function render() {
   renderPeople();
   renderIncoming();
   renderOutgoing();
+  renderCalendar();
   fillSelects();
   renderPermissions();
 }
@@ -746,6 +961,12 @@ function renderStats() {
   }
 }
 
+function storageModeLabel() {
+  if (supabaseOnline) return "Supabase";
+  if (apiOnline) return apiStorage === "postgresql" ? "Servidor PostgreSQL" : "Servidor local";
+  return "Este equipo";
+}
+
 function renderPeople() {
   const list = $("#personList");
   if (!state.people.length) return renderEmpty(list);
@@ -769,10 +990,15 @@ function renderIncoming() {
   const list = $("#incomingList");
   const q = normalize($("#searchIncoming").value);
   const status = $("#statusFilter").value;
+  const priority = $("#priorityFilter")?.value || "";
+  const assignee = $("#assigneeFilter")?.value || "";
+  const due = $("#dueFilter")?.value || "";
   const rows = state.incoming.filter((item) => {
     const matchesText = !q || normalize(`${item.folio} ${item.sender} ${item.subject} ${getAssigneeNames(item).join(" ")}`).includes(q);
     const matchesStatus = !status || item.status === status;
-    return matchesText && matchesStatus;
+    const matchesPriority = !priority || item.priority === priority;
+    const matchesAssignee = !assignee || getAssigneeNames(item).includes(assignee);
+    return matchesText && matchesStatus && matchesPriority && matchesAssignee && matchesDueFilter(item, due);
   });
   if (!rows.length) return renderEmpty(list);
   list.innerHTML = rows.map((item) => {
@@ -780,6 +1006,7 @@ function renderIncoming() {
     const statusPillClass = statusClass(item.status);
     const documentHref = safeDocumentHref(item.document?.url || item.document?.dataUrl);
     const responseDocumentHref = safeDocumentHref(item.responseDocument?.url || item.responseDocument?.dataUrl);
+    const dueText = dueSummary(item);
     const canAssign = hasRole("admin", "director");
     const canDelete = hasRole("admin", "director");
     const canRespond = hasRole("admin", "director", "ventanilla", "responsable");
@@ -794,10 +1021,15 @@ function renderIncoming() {
           <div class="meta">
             <span class="status-pill${statusPillClass}">${escapeHtml(item.status)}</span>
             <span class="meta-chip">Recibido: ${escapeHtml(item.receivedAt)}</span>
+            <span class="meta-chip">Creado: ${escapeHtml((item.createdAt || "").slice(0, 10))}</span>
+            <span class="meta-chip">Guardado: ${escapeHtml(storageModeLabel())}</span>
             ${getAssigneeNames(item).length ? `<span class="meta-chip">Asignado a: ${escapeHtml(getAssigneeNames(item).join(", "))}</span>` : ""}
-            ${item.dueAt ? `<span class="meta-chip">Limite: ${escapeHtml(item.dueAt)}</span>` : ""}
+            ${item.dueAt ? `<span class="meta-chip due-chip${dueClass(item)}">Limite: ${escapeHtml(item.dueAt)}${dueText ? ` · ${escapeHtml(dueText)}` : ""}</span>` : ""}
             ${item.responseAt ? `<span class="meta-chip">Respondido: ${escapeHtml(item.responseAt)}</span>` : ""}
+            ${item.document ? `<span class="meta-chip">Escaneo adjunto</span>` : `<span class="meta-chip">Sin escaneo</span>`}
+            ${item.responseDocument ? `<span class="meta-chip">Respuesta adjunta</span>` : ""}
           </div>
+          ${item.notes ? `<div class="response-summary muted"><strong>Observaciones</strong><p>${escapeHtml(item.notes)}</p></div>` : ""}
           ${item.responseText ? `<div class="response-summary"><strong>Respuesta</strong><p>${escapeHtml(item.responseText)}</p></div>` : ""}
         </div>
         <div class="card-actions">
@@ -816,7 +1048,14 @@ function renderIncoming() {
 function renderOutgoing() {
   const list = $("#outgoingList");
   const q = normalize($("#searchOutgoing").value);
-  const rows = state.outgoing.filter((item) => !q || normalize(`${item.fullNumber} ${item.recipient} ${item.subject} ${item.author}`).includes(q));
+  const prefix = $("#prefixFilter")?.value || "";
+  const author = $("#authorFilter")?.value || "";
+  const rows = state.outgoing.filter((item) => {
+    const matchesText = !q || normalize(`${item.fullNumber} ${item.recipient} ${item.subject} ${item.author}`).includes(q);
+    const matchesPrefix = !prefix || normalizePrefix(item.prefix) === prefix;
+    const matchesAuthor = !author || item.author === author;
+    return matchesText && matchesPrefix && matchesAuthor;
+  });
   if (!rows.length) return renderEmpty(list);
   list.innerHTML = rows.map((item) => `
     <article class="record-card">
@@ -826,15 +1065,90 @@ function renderOutgoing() {
       </div>
       <p class="record-subject">${escapeHtml(item.subject)}</p>
       <div class="meta">
+        <span class="prefix-pill" style="${escapeHtml(prefixStyle(item.prefix))}">${escapeHtml(normalizePrefix(item.prefix))}</span>
         <span class="meta-chip">Para: ${escapeHtml(item.recipient)}</span>
         <span class="meta-chip">Elabora: ${escapeHtml(item.author)}</span>
+        <span class="meta-chip">Guardado: ${escapeHtml(storageModeLabel())}</span>
+        ${item.document ? `<span class="meta-chip">Oficio guardado</span>` : ""}
       </div>
       <div class="card-actions">
-        <button class="button primary soft-primary" type="button" data-copy="${item.fullNumber}">Copiar numero</button>
+        <button class="button primary soft-primary" type="button" data-download-outgoing-word="${escapeHtml(item.id)}">Descargar oficio membretado</button>
+        ${item.document ? `<a class="button ghost" href="${escapeHtml(safeDocumentHref(item.document.url || item.document.dataUrl))}" target="_blank" rel="noopener" download="${escapeHtml(oficioDownloadName(item.fullNumber, item.document.name))}">Ver oficio guardado</a>` : ""}
         ${hasRole("admin") ? `<button class="link-button" type="button" data-delete-outgoing="${item.id}">Eliminar</button>` : ""}
       </div>
     </article>
   `).join("");
+}
+
+function renderCalendar() {
+  const pending = state.incoming
+    .filter((item) => item.dueAt && item.status !== "Respondido")
+    .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+
+  const renderList = (list) => {
+    if (!list) return;
+    if (!pending.length) {
+      list.innerHTML = `<div class="empty-state compact"><strong>Sin fechas limite</strong><span>Las asignaciones con fecha limite apareceran aqui.</span></div>`;
+      return;
+    }
+    list.innerHTML = pending.slice(0, 12).map((item) => `
+      <article class="calendar-item${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}">
+        <div>
+          <strong>${escapeHtml(item.dueAt)}</strong>
+          <span>${escapeHtml(item.folio)} - ${escapeHtml(item.sender)}</span>
+        </div>
+        <span>${escapeHtml(dueSummary(item))}</span>
+      </article>
+    `).join("");
+  };
+
+  renderList($("#calendarList"));
+
+  const month = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), 1);
+  const monthEnd = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 0);
+  const startOffset = month.getDay();
+  const totalCells = Math.ceil((startOffset + monthEnd.getDate()) / 7) * 7;
+  const title = $("#calendarTitle");
+  if (title) {
+    title.textContent = month.toLocaleDateString("es-MX", { month: "long", year: "numeric" });
+  }
+
+  const legend = $("#calendarLegend");
+  if (legend) {
+    const names = [...new Set(pending.flatMap((item) => getAssigneeNames(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    legend.innerHTML = names.length
+      ? names.map((name) => `<span class="legend-chip" style="--user-color: ${userColor(name)}">${escapeHtml(name)}</span>`).join("")
+      : `<span class="legend-chip" style="--user-color: ${userColor("Sin asignar")}">Sin asignar</span>`;
+  }
+
+  const calendar = $("#monthCalendar");
+  if (!calendar) return;
+  const weekdays = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
+  const dayCells = Array.from({ length: totalCells }, (_, index) => {
+    const dayNumber = index - startOffset + 1;
+    const inMonth = dayNumber >= 1 && dayNumber <= monthEnd.getDate();
+    const cellDate = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), dayNumber);
+    const isoDate = inMonth ? cellDate.toISOString().slice(0, 10) : "";
+    const items = inMonth ? pending.filter((item) => item.dueAt === isoDate) : [];
+    const isToday = isoDate === today();
+    return `
+      <div class="month-day${inMonth ? "" : " muted"}${isToday ? " today" : ""}">
+        <span class="day-number">${inMonth ? dayNumber : ""}</span>
+        <div class="day-activities">
+          ${items.map((item) => `
+            <article class="day-activity${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}" title="${escapeHtml(item.subject)}">
+              <strong>${escapeHtml(item.folio)}</strong>
+              <span>${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
+            </article>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }).join("");
+  calendar.innerHTML = `
+    ${weekdays.map((day) => `<div class="month-weekday">${day}</div>`).join("")}
+    ${dayCells}
+  `;
 }
 
 function renderEmpty(list) {
@@ -863,18 +1177,54 @@ function renderAssignmentDocument(item) {
 function fillSelects() {
   const options = state.people.map((person) => `<option value="${escapeHtml(person.name)}">${escapeHtml(person.name)} - ${escapeHtml(person.role)}</option>`).join("");
   $("#authorSelect").innerHTML = options;
-  $("#assignmentForm select[name='assignee']").innerHTML = options;
-  const prefixOptions = $("#prefixOptions");
-  if (prefixOptions) {
-    const prefixes = new Set(["DPDU", "CFAGU", "IP", "PP", "MR", "PYSP", ...state.outgoing.map((item) => normalizePrefix(item.prefix))]);
-    prefixOptions.innerHTML = [...prefixes].map((prefix) => `<option value="${escapeHtml(prefix)}"></option>`).join("");
+  const assigneeChecklist = $("#assigneeChecklist");
+  if (assigneeChecklist) {
+    assigneeChecklist.innerHTML = state.people.map((person) => `
+      <button class="assignee-option" type="button" data-assignee="${escapeHtml(person.name)}" aria-pressed="false">
+        <input type="hidden" name="assignee" value="${escapeHtml(person.name)}" disabled>
+        <span>
+          <strong>${escapeHtml(person.name)}</strong>
+          <small>${escapeHtml(person.role || "Sin cargo")}</small>
+        </span>
+      </button>
+    `).join("");
+  }
+  const assigneeFilter = $("#assigneeFilter");
+  if (assigneeFilter) {
+    const current = assigneeFilter.value;
+    const names = [...new Set(state.people.map((person) => person.name).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    assigneeFilter.innerHTML = `<option value="">Todos los responsables</option>${names.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}`;
+    assigneeFilter.value = names.includes(current) ? current : "";
+  }
+  const authorFilter = $("#authorFilter");
+  if (authorFilter) {
+    const current = authorFilter.value;
+    const names = [...new Set(state.outgoing.map((item) => item.author).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    authorFilter.innerHTML = `<option value="">Todos los responsables</option>${names.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("")}`;
+    authorFilter.value = names.includes(current) ? current : "";
+  }
+  const prefixSelect = $("#prefixSelect");
+  const prefixValues = new Set(["DPDU", "CFAGU", "IP", "PP", "MR", "PYSP", ...state.outgoing.map((item) => normalizePrefix(item.prefix))]);
+  if (prefixSelect) {
+    const currentPrefix = normalizePrefix(prefixSelect.value);
+    prefixSelect.innerHTML = [...prefixValues].map((prefix) => {
+      const option = prefixOption(prefix);
+      return `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`;
+    }).join("");
+    prefixSelect.value = prefixValues.has(currentPrefix) ? currentPrefix : "DPDU";
+    prefixSelect.style.setProperty("--prefix-color", prefixOption(prefixSelect.value).color);
+  }
+  const prefixFilter = $("#prefixFilter");
+  if (prefixFilter) {
+    const current = prefixFilter.value;
+    prefixFilter.innerHTML = `<option value="">Todos los prefijos</option>${[...prefixValues].map((prefix) => `<option value="${escapeHtml(prefix)}">${escapeHtml(prefix)}</option>`).join("")}`;
+    prefixFilter.value = prefixValues.has(current) ? current : "";
   }
 }
 
-function buildDirectorEmail(item) {
-  const subject = encodeURIComponent(`Nuevo oficio recibido: ${item.folio}`);
-  const body = encodeURIComponent([
-    "Director le ecribo este mensaje para informarque que se recibio el oficio siguiente:",
+function directorMessage(item) {
+  return [
+    "Director, le escribo este mensaje para informarle que se recibió el oficio siguiente:",
     "",
     `Folio: ${item.folio}`,
     `Fecha de recepcion: ${item.receivedAt}`,
@@ -884,25 +1234,32 @@ function buildDirectorEmail(item) {
     item.notes ? `Observaciones: ${item.notes}` : "",
     "",
     "Ya se encuentra registrado en el Sistema",
-  ].filter(Boolean).join("\n"));
-  return `mailto:${state.settings.directorEmail}?subject=${subject}&body=${body}`;
+  ].filter(Boolean).join("\n");
+}
+
+function buildGmailCompose(to, subjectText, bodyText) {
+  const params = new URLSearchParams({
+    view: "cm",
+    fs: "1",
+    to,
+    su: subjectText,
+    body: bodyText,
+  });
+  return `https://mail.google.com/mail/?${params.toString()}`;
+}
+
+function buildDirectorGmail(item) {
+  return buildGmailCompose(
+    state.settings.directorEmail,
+    `Nuevo oficio recibido: ${item.folio}`,
+    directorMessage(item)
+  );
 }
 
 function buildDirectorWhatsapp(item) {
   const phone = whatsappPhone(state.settings.directorPhone);
   if (!phone) return "";
-  const text = encodeURIComponent([
-    "Director le ecribo este mensaje para informarque que se recibio el oficio siguiente:",
-    "",
-    `Folio: ${item.folio}`,
-    `Fecha de recepcion: ${item.receivedAt}`,
-    `Remitente: ${item.sender}`,
-    `Prioridad: ${item.priority}`,
-    `Asunto: ${item.subject}`,
-    item.notes ? `Observaciones: ${item.notes}` : "",
-    "",
-    "Ya se encuentra registrado en el Sistema",
-  ].filter(Boolean).join("\n"));
+  const text = encodeURIComponent(directorMessage(item));
   return `https://wa.me/${phone}?text=${text}`;
 }
 
@@ -1024,12 +1381,10 @@ function buildAssignmentMessage(item) {
   ].filter(Boolean).join("\n");
 }
 
-function mailtoAssignment(item, people) {
+function gmailAssignment(item, people) {
   const emails = people.map((person) => person.email).filter(Boolean);
   if (!emails.length) return "";
-  const subject = encodeURIComponent(`Oficio asignado: ${item.folio}`);
-  const body = encodeURIComponent(buildAssignmentMessage(item));
-  return `mailto:${emails.join(",")}?subject=${subject}&body=${body}`;
+  return buildGmailCompose(emails.join(","), `Oficio asignado: ${item.folio}`, buildAssignmentMessage(item));
 }
 
 function whatsappAssignmentLinks(item, people) {
@@ -1047,10 +1402,10 @@ function openAssignmentNotifications(item) {
 function notifyDirector(item) {
   const channels = notificationSettings();
   const actions = [];
-  const mail = buildDirectorEmail(item);
+  const gmail = buildDirectorGmail(item);
   const whatsapp = buildDirectorWhatsapp(item);
   if (channels.email && state.settings.directorEmail) {
-    actions.push({ label: "Enviar correo", href: mail, primary: true });
+    actions.push({ label: "Enviar Correo", href: gmail, target: "_blank", primary: true });
   }
   if (channels.whatsapp && whatsapp) {
     actions.push({ label: "Enviar WhatsApp", href: whatsapp, target: "_blank" });
@@ -1065,10 +1420,10 @@ function notifyAssignment(item) {
   const people = peopleForAssignees(item);
   const channels = notificationSettings();
   const actions = [];
-  const mail = mailtoAssignment(item, people);
+  const gmail = gmailAssignment(item, people);
   const whatsappLinks = whatsappAssignmentLinks(item, people);
-  if (channels.email && mail) {
-    actions.push({ label: "Enviar correo", href: mail, primary: true });
+  if (channels.email && gmail) {
+    actions.push({ label: "Enviar Correo", href: gmail, target: "_blank", primary: true });
   }
   if (channels.whatsapp) {
     whatsappLinks.slice(0, 4).forEach((href, index) => {
@@ -1082,6 +1437,41 @@ function notifyAssignment(item) {
   const body = notificationTextForAssignment(item);
   showNotificationPopup({ title, body, actions, type: "success" });
   showNativeNotification(title, body);
+}
+
+function checkDueReminders() {
+  const shown = loadReminderState();
+  let changed = false;
+  state.incoming
+    .filter((item) => item.dueAt && item.status !== "Respondido")
+    .forEach((item) => {
+      const due = dueDateTime(item);
+      if (!due) return;
+      const hoursLeft = (due.getTime() - Date.now()) / 36e5;
+      REMINDER_WINDOWS.forEach((windowItem, index) => {
+        const nextWindow = REMINDER_WINDOWS[index + 1];
+        const reminderKey = `${item.id}:${windowItem.key}`;
+        if (shown[reminderKey] || hoursLeft < 0 || hoursLeft > windowItem.hours) return;
+        if (nextWindow && hoursLeft <= nextWindow.hours) return;
+        shown[reminderKey] = new Date().toISOString();
+        changed = true;
+        const title = `Vence en ${windowItem.label}: ${item.folio}`;
+        const body = [
+          `Remitente: ${item.sender}`,
+          `Responsable: ${getAssigneeNames(item).join(", ") || "Sin asignar"}`,
+          `Fecha limite: ${item.dueAt}`,
+          `Asunto: ${item.subject}`,
+        ].join("\n");
+        showNotificationPopup({ title, body, actions: [], type: "info" });
+        showNativeNotification(title, body);
+      });
+    });
+  if (changed) saveReminderState(shown);
+}
+
+function bindReminders() {
+  checkDueReminders();
+  setInterval(checkDueReminders, 5 * 60 * 1000);
 }
 
 async function saveSettings() {
@@ -1250,15 +1640,46 @@ function bindTabs() {
     tab.addEventListener("click", () => {
       $$(".tab").forEach((item) => item.classList.toggle("is-active", item === tab));
       $$(".view").forEach((view) => view.classList.toggle("is-active", view.id === `view-${tab.dataset.view}`));
+      if (tab.dataset.view === "calendar") renderCalendar();
     });
   });
 }
 
+function bindCalendarControls() {
+  $("#calendarPrev")?.addEventListener("click", () => {
+    calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
+    renderCalendar();
+  });
+  $("#calendarNext")?.addEventListener("click", () => {
+    calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1);
+    renderCalendar();
+  });
+  $("#calendarToday")?.addEventListener("click", () => {
+    calendarCursor = new Date(`${today()}T00:00:00`);
+    renderCalendar();
+  });
+}
+
 function bindForms() {
+  const trackedForms = ["incomingForm", "outgoingForm", "personForm", "settingsForm"];
+  trackedForms.forEach((id) => {
+    const form = $(`#${id}`);
+    if (!form) return;
+    const markDirty = () => { form.dataset.dirty = "true"; };
+    form.addEventListener("input", markDirty);
+    form.addEventListener("change", markDirty);
+    form.addEventListener("reset", () => { form.dataset.dirty = "false"; });
+    form.dataset.dirty = "false";
+  });
+
   $("#incomingForm").elements.receivedAt.value = today();
   $("#outgoingForm").elements.createdAt.value = today();
   ["prefix", "createdAt"].forEach((name) => {
     $("#outgoingForm").elements[name].addEventListener("input", renderStats);
+  });
+  $("#prefixSelect")?.addEventListener("change", (event) => {
+    event.currentTarget.style.setProperty("--prefix-color", prefixOption(event.currentTarget.value).color);
+    renderStats();
   });
 
   $("#incomingForm").addEventListener("submit", async (event) => {
@@ -1280,6 +1701,7 @@ function bindForms() {
         createdAt: new Date().toISOString(),
       };
       await put("incoming", item);
+      form.dataset.dirty = "false";
       form.reset();
       form.elements.receivedAt.value = today();
       await refresh();
@@ -1298,6 +1720,7 @@ function bindForms() {
       const prefix = normalizePrefix(data.prefix);
       const number = nextOutgoingNumber(prefix, data.createdAt);
       const year = outgoingYear(data.createdAt);
+      const documentFile = form.elements.document?.files[0];
       const item = {
         id: uid(),
         number,
@@ -1307,15 +1730,14 @@ function bindForms() {
         recipient: data.recipient.trim(),
         subject: data.subject.trim(),
         author: data.author,
+        document: await fileToRecord(documentFile),
       };
-      if (supabaseOnline) {
-        await put("outgoing", item);
-      } else {
-        await put("outgoing", item);
-      }
+      await createOutgoing(item);
+      form.dataset.dirty = "false";
       form.reset();
       form.elements.prefix.value = "DPDU";
       form.elements.createdAt.value = today();
+      form.elements.prefix.style.setProperty("--prefix-color", prefixOption("DPDU").color);
       await refresh();
       showMessage("Consecutivo guardado correctamente.", "success");
     } catch (error) {
@@ -1335,6 +1757,7 @@ function bindForms() {
         email: data.email.trim(),
         phone: normalizePhone(data.phone),
       });
+      form.dataset.dirty = "false";
       form.reset();
       await refresh();
       showMessage("Persona guardada correctamente.", "success");
@@ -1349,11 +1772,11 @@ function bindForms() {
       const form = event.currentTarget;
       state.settings.directorEmail = form.elements.directorEmail.value.trim();
       state.settings.directorPhone = normalizePhone(form.elements.directorPhone.value);
-      state.settings.adminDeleteKey = form.elements.adminDeleteKey.value.trim() || DEFAULT_ADMIN_DELETE_KEY;
       state.settings.notifyEmail = form.elements.notifyEmail.checked;
       state.settings.notifyWhatsapp = form.elements.notifyWhatsapp.checked;
       state.settings.notifySystem = form.elements.notifySystem.checked;
       await saveSettings();
+      form.dataset.dirty = "false";
       await refresh();
       showMessage("Configuracion guardada correctamente.", "success");
     } catch (error) {
@@ -1374,6 +1797,10 @@ function bindForms() {
       const item = state.incoming.find((row) => row.id === data.id);
       if (!item) return;
       const assignees = formData.getAll("assignee").filter(Boolean);
+      if (!assignees.length) {
+        showMessage("Selecciona al menos una persona responsable.", "error");
+        return;
+      }
       item.assignees = assignees;
       item.assignee = assignees.join(", ");
       item.assigneeIds = assignees
@@ -1434,12 +1861,24 @@ function bindLists() {
       const form = $("#assignmentForm");
       form.elements.id.value = item.id;
       const selected = new Set(getAssigneeNames(item));
-      [...form.elements.assignee.options].forEach((option) => {
-        option.selected = selected.has(option.value);
+      $$(".assignee-option", form).forEach((option) => {
+        const isSelected = selected.has(option.dataset.assignee);
+        option.classList.toggle("is-selected", isSelected);
+        option.setAttribute("aria-pressed", String(isSelected));
+        option.querySelector("input[name='assignee']").disabled = !isSelected;
       });
       form.elements.dueAt.value = item.dueAt || "";
       renderAssignmentDocument(item);
       $("#assignmentDialog").showModal();
+      return;
+    }
+
+    if (target.classList.contains("assignee-option")) {
+      const input = target.querySelector("input[name='assignee']");
+      const isSelected = target.getAttribute("aria-pressed") === "true";
+      target.classList.toggle("is-selected", !isSelected);
+      target.setAttribute("aria-pressed", String(!isSelected));
+      if (input) input.disabled = isSelected;
       return;
     }
 
@@ -1458,6 +1897,16 @@ function bindLists() {
     if (target.dataset.email) {
       const item = state.incoming.find((row) => row.id === target.dataset.email);
       if (item) openDirectorEmail(item);
+      return;
+    }
+
+    if (target.dataset.downloadOutgoingWord) {
+      try {
+        const item = state.outgoing.find((row) => row.id === target.dataset.downloadOutgoingWord);
+        if (item) await downloadOutgoingWord(item);
+      } catch (error) {
+        showMessage(`No se pudo descargar el oficio: ${describeError(error)}`, "error");
+      }
       return;
     }
 
@@ -1491,20 +1940,20 @@ function bindLists() {
       return;
     }
 
-    if (target.dataset.copy) {
-      await navigator.clipboard.writeText(target.dataset.copy);
-      target.textContent = "Copiado";
-      setTimeout(() => { target.textContent = "Copiar numero"; }, 1200);
-    }
   });
 
-  ["searchIncoming", "statusFilter", "searchOutgoing"].forEach((id) => {
-    $(`#${id}`).addEventListener("input", render);
+  ["searchIncoming", "statusFilter", "priorityFilter", "assigneeFilter", "dueFilter", "searchOutgoing", "prefixFilter", "authorFilter"].forEach((id) => {
+    $(`#${id}`)?.addEventListener("input", render);
   });
 }
 
 function excelRows() {
   return {
+    Metadatos: [{
+      schema_version: DATA_SCHEMA_VERSION,
+      exported_at: new Date().toISOString(),
+      app: "Control de Oficios DPDU",
+    }],
     Recibidos: state.incoming.map((item) => ({
       id: item.id,
       folio: item.folio,
@@ -1544,7 +1993,7 @@ function excelRows() {
       notificar_correo: state.settings.notifyEmail,
       notificar_whatsapp: state.settings.notifyWhatsapp,
       notificar_sistema: state.settings.notifySystem,
-      clave_borrado: state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY,
+      clave_borrado: state.settings.adminDeleteKey || "",
     }],
   };
 }
@@ -1562,6 +2011,11 @@ async function exportExcel() {
 
 function importedFromWorkbook(workbook, XLSX) {
   const sheet = (name) => XLSX.utils.sheet_to_json(workbook.Sheets[name] || {});
+  const metadata = sheet("Metadatos")[0] || {};
+  const schemaVersion = Number(metadata.schema_version || 0) || 0;
+  if (schemaVersion > DATA_SCHEMA_VERSION) {
+    throw new Error(`El respaldo usa una version de datos mas nueva (${schemaVersion}). Actualiza la app antes de importar.`);
+  }
   const incoming = sheet("Recibidos").map((row) => normalizeIncomingItem({
     id: row.id || uid(),
     folio: row.folio || "",
@@ -1596,6 +2050,10 @@ function importedFromWorkbook(workbook, XLSX) {
   })).filter((person) => person.name);
   const config = sheet("Configuracion")[0] || {};
   return {
+    metadata: {
+      schemaVersion: schemaVersion || 1,
+      exportedAt: metadata.exported_at || "",
+    },
     incoming,
     outgoing,
     people,
@@ -1607,13 +2065,20 @@ function importedFromWorkbook(workbook, XLSX) {
       notifyEmail: config.notificar_correo ?? state.settings.notifyEmail,
       notifyWhatsapp: config.notificar_whatsapp ?? state.settings.notifyWhatsapp,
       notifySystem: config.notificar_sistema ?? state.settings.notifySystem,
-      adminDeleteKey: config.clave_borrado || state.settings.adminDeleteKey || DEFAULT_ADMIN_DELETE_KEY,
+      adminDeleteKey: config.clave_borrado || state.settings.adminDeleteKey || "",
     },
   };
 }
 
 async function parseImportFile(file) {
-  if (file.name.toLowerCase().endsWith(".json")) return JSON.parse(await file.text());
+  if (file.name.toLowerCase().endsWith(".json")) {
+    const imported = JSON.parse(await file.text());
+    const schemaVersion = Number(imported.metadata?.schemaVersion || imported.schemaVersion || 0) || 0;
+    if (schemaVersion > DATA_SCHEMA_VERSION) {
+      throw new Error(`El respaldo usa una version de datos mas nueva (${schemaVersion}). Actualiza la app antes de importar.`);
+    }
+    return imported;
+  }
   const XLSX = await loadXlsx();
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer);
@@ -1691,6 +2156,7 @@ function bindLiveRefresh() {
     const editingTags = new Set(["INPUT", "TEXTAREA", "SELECT"]);
     return document.hidden
       || Boolean($("dialog[open]"))
+      || Boolean($("form[data-dirty='true']"))
       || Boolean(active && editingTags.has(active.tagName));
   };
   const run = async () => {
@@ -1727,11 +2193,13 @@ async function init() {
   }
   showAuthScreen(false);
   bindTabs();
+  bindCalendarControls();
   bindForms();
   bindLists();
   bindImportExport();
   bindInstallPrompt();
   bindLiveRefresh();
+  bindReminders();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js");
   }

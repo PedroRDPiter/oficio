@@ -41,7 +41,9 @@ body {
     linear-gradient(120deg, rgba(36, 91, 78, 0.11), transparent 34%),
     linear-gradient(180deg, rgba(220, 236, 230, 0.7), rgba(243, 245, 244, 0) 320px),
     var(--bg);
+  background-size: 100% 100%, 100% 100%, auto;
   color: var(--ink);
+  animation: pageGlow 16s ease-in-out infinite alternate;
 }
 
 body::before {
@@ -54,6 +56,7 @@ body::before {
     linear-gradient(135deg, rgba(22, 68, 57, 0.06) 0 1px, transparent 1px 18px),
     linear-gradient(45deg, rgba(148, 103, 20, 0.05) 0 1px, transparent 1px 22px);
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.75), transparent 72%);
+  animation: patternDrift 24s linear infinite;
 }
 
 button,
@@ -142,6 +145,7 @@ nav,
   background: rgba(255, 255, 255, 0.92);
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(18px);
+  animation: cardRise 420ms ease both;
 }
 
 .auth-brand {
@@ -204,6 +208,14 @@ nav,
   font-weight: 900;
   letter-spacing: 0;
   box-shadow: inset 0 0 0 1px rgba(36, 91, 78, 0.08);
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.brand:hover .brand-mark {
+  transform: rotate(-3deg) scale(1.04);
+  box-shadow:
+    inset 0 0 0 1px rgba(36, 91, 78, 0.08),
+    0 8px 18px rgba(5, 27, 22, 0.14);
 }
 
 .brand strong,
@@ -242,15 +254,24 @@ nav,
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
-.tab span {
+.tab-icon {
   width: 28px;
   height: 28px;
   border-radius: 8px;
   display: grid;
   place-items: center;
   background: rgba(255, 255, 255, 0.1);
-  font-size: 0.75rem;
-  font-weight: 900;
+  flex: 0 0 auto;
+}
+
+.tab-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tab.is-active,
@@ -318,6 +339,16 @@ nav,
   overflow: hidden;
 }
 
+.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 18%, rgba(255, 255, 255, 0.2) 45%, transparent 70%);
+  transform: translateX(-130%);
+  animation: sheen 7s ease-in-out infinite;
+  pointer-events: none;
+}
+
 .topbar::after {
   content: "";
   position: absolute;
@@ -357,6 +388,8 @@ h2 {
 
 .button,
 .icon-button {
+  position: relative;
+  overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: linear-gradient(180deg, #ffffff, #f7faf8);
@@ -375,6 +408,29 @@ h2 {
   touch-action: manipulation;
   box-shadow: var(--shadow-sm);
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.button::after,
+.icon-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.42), transparent 58%);
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+}
+
+.button:active,
+.icon-button:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.button:active::after,
+.icon-button:active::after {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .button.primary {
@@ -496,6 +552,13 @@ h2 {
   background: var(--surface-soft);
   padding: 10px 12px;
   line-height: 1.35;
+  animation: cardRise 260ms ease both;
+}
+
+.calendar-item > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .calendar-item strong,
@@ -512,6 +575,20 @@ h2 {
   font-size: 0.82rem;
 }
 
+.calendar-note {
+  margin: 2px 0 0;
+  color: #31403b;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.calendar-note strong {
+  display: inline;
+  color: var(--accent);
+  font-size: inherit;
+}
+
 .calendar-item.soon {
   border-left-color: var(--gold);
 }
@@ -519,6 +596,7 @@ h2 {
 .calendar-item.urgent,
 .calendar-item.overdue {
   border-left-color: var(--danger);
+  animation: cardRise 260ms ease both, alertPulse 1.8s ease-in-out infinite;
 }
 
 .month-calendar {
@@ -564,6 +642,7 @@ h2 {
 
 .month-day.today {
   box-shadow: inset 0 0 0 2px var(--accent);
+  animation: todayGlow 2.8s ease-in-out infinite;
 }
 
 .day-number {
@@ -597,6 +676,12 @@ h2 {
   padding: 6px 7px;
   min-height: 42px;
   overflow: hidden;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.day-activity:hover {
+  transform: translateX(2px);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--user-color) 16%, transparent);
 }
 
 .day-activity strong,
@@ -604,6 +689,15 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.day-activity .calendar-note {
+  display: -webkit-box;
+  margin: 2px 0 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
 }
 
 .day-activity strong {
@@ -634,6 +728,19 @@ dialog {
   min-height: 92px;
   box-shadow: var(--shadow-sm);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+  animation: cardRise 320ms ease both;
+}
+
+.stat-card:nth-child(2) {
+  animation-delay: 45ms;
+}
+
+.stat-card:nth-child(3) {
+  animation-delay: 90ms;
+}
+
+.stat-card:nth-child(4) {
+  animation-delay: 135ms;
 }
 
 .stat-card::before {
@@ -707,6 +814,7 @@ dialog {
 .panel {
   padding: 17px;
   box-shadow: var(--shadow-md);
+  animation: cardRise 300ms ease both;
 }
 
 .form-panel {
@@ -824,6 +932,7 @@ select[multiple] option {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: inset 4px 0 0 var(--accent);
+  animation: selectedPop 180ms ease both;
 }
 
 .assignee-option.is-selected::after {
@@ -969,6 +1078,23 @@ input[type="file"]::file-selector-button {
   gap: 10px;
   box-shadow: var(--shadow-sm);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+  animation: cardRise 280ms ease both;
+}
+
+.record-card:nth-child(2) {
+  animation-delay: 35ms;
+}
+
+.record-card:nth-child(3) {
+  animation-delay: 70ms;
+}
+
+.record-card:nth-child(4) {
+  animation-delay: 105ms;
+}
+
+.record-card:nth-child(n + 5) {
+  animation-delay: 140ms;
 }
 
 .record-main {
@@ -1055,12 +1181,14 @@ input[type="file"]::file-selector-button {
 .due-chip.soon {
   background: var(--gold-soft);
   color: #6d4a18;
+  animation: softPulse 2.4s ease-in-out infinite;
 }
 
 .due-chip.urgent,
 .due-chip.overdue {
   background: var(--danger-soft);
   color: #8f321f;
+  animation: alertPulse 1.45s ease-in-out infinite;
 }
 
 .status-pill.pending {
@@ -1076,6 +1204,7 @@ input[type="file"]::file-selector-button {
 .status-pill.assigned {
   background: var(--accent-soft);
   color: var(--accent-strong);
+  box-shadow: 0 0 0 0 rgba(36, 91, 78, 0.16);
 }
 
 .status-pill.done {
@@ -1251,6 +1380,7 @@ dialog::backdrop {
   top: 18px;
   z-index: 60;
   width: min(430px, calc(100vw - 24px));
+  animation: slideToast 240ms ease both;
 }
 
 .notification-center[hidden] {
@@ -1266,6 +1396,7 @@ dialog::backdrop {
   color: var(--ink);
   padding: 14px;
   box-shadow: var(--shadow-lg);
+  animation: cardRise 260ms ease both;
 }
 
 .notification-heading {
@@ -1352,6 +1483,109 @@ dialog::backdrop {
   }
 }
 
+@keyframes cardRise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slideToast {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sheen {
+  0%,
+  58% {
+    transform: translateX(-130%);
+  }
+
+  74%,
+  100% {
+    transform: translateX(130%);
+  }
+}
+
+@keyframes patternDrift {
+  from {
+    background-position: 0 0, 0 0;
+  }
+
+  to {
+    background-position: 120px 80px, -90px 110px;
+  }
+}
+
+@keyframes pageGlow {
+  from {
+    background-position: 0 0, 0 0, 0 0;
+  }
+
+  to {
+    background-position: 0 0, 0 32px, 0 0;
+  }
+}
+
+@keyframes softPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(148, 103, 20, 0.14);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px rgba(148, 103, 20, 0);
+  }
+}
+
+@keyframes alertPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(168, 70, 50, 0.16);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(168, 70, 50, 0);
+  }
+}
+
+@keyframes todayGlow {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 0 rgba(36, 91, 78, 0.16);
+  }
+
+  50% {
+    box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 5px rgba(36, 91, 78, 0);
+  }
+}
+
+@keyframes selectedPop {
+  0% {
+    transform: scale(0.985);
+  }
+
+  70% {
+    transform: scale(1.012);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1426,10 +1660,14 @@ dialog::backdrop {
     overflow: hidden;
   }
 
-  .tab span {
+  .tab-icon {
     width: 26px;
     height: 24px;
-    font-size: 0.7rem;
+  }
+
+  .tab-icon svg {
+    width: 16px;
+    height: 16px;
   }
 
   .workspace {

@@ -16,10 +16,12 @@ alter table oficios_recibidos
 add column if not exists respuesta text,
 add column if not exists fecha_respuesta date,
 add column if not exists respuesta_documento_url text,
-add column if not exists respuesta_documento_nombre text;
+add column if not exists respuesta_documento_nombre text,
+add column if not exists instrucciones text;
 
 alter table configuracion
 add column if not exists telefono_director text,
+add column if not exists clave_borrado text,
 add column if not exists notificar_correo boolean not null default true,
 add column if not exists notificar_whatsapp boolean not null default false,
 add column if not exists notificar_sistema boolean not null default true;

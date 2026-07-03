@@ -5,7 +5,7 @@ const DB_NAME = "oficios-pwa";
 const DB_VERSION = 1;
 const DATA_SCHEMA_VERSION = 1;
 const STORES = ["incoming", "outgoing", "people", "settings"];
-const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 const ALLOWED_DOCUMENT_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -151,7 +151,7 @@ async function detectApi() {
     if (response.ok) {
       const health = await response.json();
       apiStorage = health.storage || "local";
-      apiOnline = health.authConfigured !== false;
+      apiOnline = true;
     }
   } catch {
     apiOnline = false;
@@ -211,13 +211,23 @@ async function apiRequest(path, options = {}) {
       ...requestOptions,
       headers: apiHeaders(options.headers),
     });
-    if (!retry.ok) throw new Error(`Error del servidor ${retry.status}`);
+    if (!retry.ok) throw new Error(await responseErrorMessage(retry));
     if (retry.status === 204) return null;
     return retry.json();
   }
-  if (!response.ok) throw new Error(`Error del servidor ${response.status}`);
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
   if (response.status === 204) return null;
   return response.json();
+}
+
+async function responseErrorMessage(response) {
+  try {
+    const payload = await response.json();
+    if (payload?.error) return payload.error;
+  } catch {
+    // Ignore non-JSON error bodies.
+  }
+  return `Error del servidor ${response.status}`;
 }
 
 function localApiToken() {
@@ -283,7 +293,10 @@ function createOutgoing(value) {
 function remove(store, id) {
   if (supabaseOnline) return supabaseRemove(store, id);
   if (apiOnline) {
-    return apiRequest(`/api/${store}/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return apiRequest(`/api/${store}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "X-Delete-Key": state.pendingDeleteKey || "" },
+    });
   }
   return new Promise((resolve, reject) => {
     const request = tx(store, "readwrite").delete(id);
@@ -361,6 +374,7 @@ async function incomingToApp(row) {
     assigneeId: row.asignado_a || "",
     assigneeIds: row.asignado_a ? [row.asignado_a] : [],
     dueAt: row.fecha_limite || "",
+    instructions: row.instrucciones || "",
     createdAt: row.creado_en || new Date().toISOString(),
   };
 }
@@ -369,7 +383,8 @@ async function incomingToDb(item) {
   const recordId = supabaseRecordId(item.id);
   const uploadedDocument = await uploadSupabaseDocument(item.document, recordId, "recibidos");
   const uploadedResponseDocument = await uploadSupabaseDocument(item.responseDocument, recordId, "respuestas");
-  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || state.people.find((person) => person.name === item.assignee)?.id || null;
+  const assigneeNames = getAssigneeNames(item);
+  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || assigneeNames.map((name) => personByName(name)?.id).find(Boolean) || null;
   return {
     id: recordId,
     folio: item.folio,
@@ -387,6 +402,7 @@ async function incomingToDb(item) {
     respuesta_documento_nombre: uploadedResponseDocument?.name || item.responseDocument?.name || null,
     asignado_a: supabaseOptionalUuid(assigneeId),
     fecha_limite: item.dueAt || null,
+    instrucciones: item.instructions || null,
     creado_en: item.createdAt || new Date().toISOString(),
   };
 }
@@ -426,6 +442,7 @@ function settingsToApp(row) {
     nextNumber: row.siguiente_numero,
     directorEmail: row.correo_director,
     directorPhone: row.telefono_director || "",
+    adminDeleteKey: row.clave_borrado || "",
     notifyEmail: row.notificar_correo ?? true,
     notifyWhatsapp: row.notificar_whatsapp ?? false,
     notifySystem: row.notificar_sistema ?? true,
@@ -438,6 +455,7 @@ function settingsToDb(settings) {
     siguiente_numero: settings.nextNumber,
     correo_director: settings.directorEmail,
     telefono_director: settings.directorPhone || null,
+    clave_borrado: settings.adminDeleteKey || null,
     notificar_correo: Boolean(settings.notifyEmail),
     notificar_whatsapp: Boolean(settings.notifyWhatsapp),
     notificar_sistema: Boolean(settings.notifySystem),
@@ -520,7 +538,7 @@ function basenameWithoutExtension(name = "") {
 function assertValidDocument(file) {
   if (!file) return;
   if (file.size > MAX_DOCUMENT_BYTES) {
-    throw new Error("El documento supera el limite de 10 MB.");
+    throw new Error("El documento supera el limite de 15 MB.");
   }
   if (!ALLOWED_DOCUMENT_TYPES.has(file.type)) {
     throw new Error("Solo se permiten PDF, Word, JPG, PNG o WebP.");
@@ -782,7 +800,25 @@ function canUseNativeNotifications() {
 function getAssigneeNames(item) {
   if (Array.isArray(item.assignees) && item.assignees.length) return item.assignees.filter(Boolean);
   if (item.assignee) return [item.assignee];
+  if (Array.isArray(item.assigneeIds) && item.assigneeIds.length) {
+    return item.assigneeIds
+      .map((id) => state.people.find((person) => person.id === id)?.name)
+      .filter(Boolean);
+  }
+  if (item.assigneeId) {
+    const person = state.people.find((row) => row.id === item.assigneeId);
+    if (person) return [person.name];
+  }
   return [];
+}
+
+function assignmentNote(item) {
+  return item.instructions || item.instrucciones || item.assignmentNote || item.assignmentNotes || "";
+}
+
+function personByName(name) {
+  const normalizedName = normalize(name);
+  return state.people.find((person) => normalize(person.name) === normalizedName);
 }
 
 function dueDateTime(item) {
@@ -828,7 +864,24 @@ function itemAssigneeColor(item) {
 }
 
 function dateOnly(value) {
+  if (value instanceof Date) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
   return new Date(`${value || today()}T00:00:00`);
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function googleCalendarDate(value) {
+  const date = dateOnly(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
 }
 
 function matchesDueFilter(item, filter) {
@@ -847,9 +900,20 @@ function matchesDueFilter(item, filter) {
 function confirmAdminDelete() {
   if (!hasRole("admin", "director")) {
     showMessage("No tienes permisos para borrar este registro.", "error");
-    return false;
+    return "";
   }
-  return window.confirm("Esta accion borrara el registro. Deseas continuar?");
+  const key = window.prompt("Contraseña para borrar:");
+  if (key === null) return "";
+  if (!key.trim()) {
+    showMessage("Ingresa la contraseña para borrar.", "error");
+    return "";
+  }
+  if (!apiOnline && key !== state.settings.adminDeleteKey) {
+    showMessage("Contraseña incorrecta. No se borro el registro.", "error");
+    return "";
+  }
+  if (!window.confirm("Esta accion borrara el registro. Deseas continuar?")) return "";
+  return key;
 }
 
 function normalizeIncomingItem(item) {
@@ -1010,6 +1074,7 @@ function renderIncoming() {
     const canAssign = hasRole("admin", "director");
     const canDelete = hasRole("admin", "director");
     const canRespond = hasRole("admin", "director", "ventanilla", "responsable");
+    const canUploadDocument = hasRole("admin", "director", "ventanilla", "responsable");
     return `
       <article class="record-card">
         <div class="record-main">
@@ -1030,12 +1095,14 @@ function renderIncoming() {
             ${item.responseDocument ? `<span class="meta-chip">Respuesta adjunta</span>` : ""}
           </div>
           ${item.notes ? `<div class="response-summary muted"><strong>Observaciones</strong><p>${escapeHtml(item.notes)}</p></div>` : ""}
+          ${assignmentNote(item) ? `<div class="response-summary muted"><strong>Notas de asignacion</strong><p>${escapeHtml(assignmentNote(item))}</p></div>` : ""}
           ${item.responseText ? `<div class="response-summary"><strong>Respuesta</strong><p>${escapeHtml(item.responseText)}</p></div>` : ""}
         </div>
         <div class="card-actions">
           ${canAssign ? `<button class="button primary soft-primary" type="button" data-assign="${item.id}">Asignar</button>` : ""}
           ${canRespond ? `<button class="button" type="button" data-response="${item.id}">Responder</button>` : ""}
           <button class="button ghost" type="button" data-email="${item.id}">Avisar director</button>
+          ${canUploadDocument ? `<button class="button ghost" type="button" data-upload-incoming-document="${item.id}">${item.document ? "Modificar archivo" : "Subir archivo"}</button>` : ""}
           ${documentHref ? `<a class="button ghost" href="${escapeHtml(documentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.document.name)}">Ver escaneo</a>` : ""}
           ${responseDocumentHref ? `<a class="button ghost" href="${escapeHtml(responseDocumentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.responseDocument.name)}">Ver respuesta</a>` : ""}
           ${canDelete ? `<button class="link-button" type="button" data-delete-incoming="${item.id}">Eliminar</button>` : ""}
@@ -1096,6 +1163,8 @@ function renderCalendar() {
         <div>
           <strong>${escapeHtml(item.dueAt)}</strong>
           <span>${escapeHtml(item.folio)} - ${escapeHtml(item.sender)}</span>
+          <span>Asignado a: ${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
+          ${assignmentNote(item) ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(assignmentNote(item))}</p>` : ""}
         </div>
         <span>${escapeHtml(dueSummary(item))}</span>
       </article>
@@ -1136,9 +1205,10 @@ function renderCalendar() {
         <span class="day-number">${inMonth ? dayNumber : ""}</span>
         <div class="day-activities">
           ${items.map((item) => `
-            <article class="day-activity${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}" title="${escapeHtml(item.subject)}">
+            <article class="day-activity${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}" title="${escapeHtml(`${item.folio}\nAsignado a: ${getAssigneeNames(item).join(", ") || "Sin asignar"}${assignmentNote(item) ? `\nNotas: ${assignmentNote(item)}` : ""}\n${item.subject}`)}">
               <strong>${escapeHtml(item.folio)}</strong>
-              <span>${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
+              <span>Asignado a: ${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
+              ${assignmentNote(item) ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(assignmentNote(item))}</p>` : ""}
             </article>
           `).join("")}
         </div>
@@ -1223,6 +1293,7 @@ function fillSelects() {
 }
 
 function directorMessage(item) {
+  const calendarHref = googleCalendarForIncoming(item);
   return [
     "Director, le escribo este mensaje para informarle que se recibió el oficio siguiente:",
     "",
@@ -1233,8 +1304,46 @@ function directorMessage(item) {
     `Asunto: ${item.subject}`,
     item.notes ? `Observaciones: ${item.notes}` : "",
     "",
+    calendarHref ? `Agendar en Google Calendar: ${calendarHref}` : "",
+    "",
     "Ya se encuentra registrado en el Sistema",
   ].filter(Boolean).join("\n");
+}
+
+function googleCalendarUrl({ title, date, details, guests = [] }) {
+  if (!date) return "";
+  const start = googleCalendarDate(date);
+  const end = googleCalendarDate(addDays(dateOnly(date), 1));
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: title,
+    dates: `${start}/${end}`,
+    details,
+    ctz: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Mexico_City",
+  });
+  const guestList = guests.filter(Boolean).join(",");
+  if (guestList) params.set("add", guestList);
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
+function googleCalendarForIncoming(item) {
+  const date = item.dueAt || item.receivedAt || today();
+  return googleCalendarUrl({
+    title: `Seguimiento oficio ${item.folio}`,
+    date,
+    details: notificationTextForIncoming(item),
+    guests: [state.settings.directorEmail],
+  });
+}
+
+function googleCalendarForAssignment(item, people = []) {
+  const date = item.dueAt || today();
+  return googleCalendarUrl({
+    title: `Responder oficio ${item.folio}`,
+    date,
+    details: buildAssignmentMessage(item),
+    guests: people.map((person) => person.email),
+  });
 }
 
 function buildGmailCompose(to, subjectText, bodyText) {
@@ -1378,13 +1487,20 @@ function buildAssignmentMessage(item) {
     `Remitente: ${item.sender}`,
     `Asunto: ${item.subject}`,
     item.dueAt ? `Fecha limite: ${item.dueAt}` : "",
+    assignmentNote(item) ? `Notas: ${assignmentNote(item)}` : "",
   ].filter(Boolean).join("\n");
 }
 
 function gmailAssignment(item, people) {
   const emails = people.map((person) => person.email).filter(Boolean);
   if (!emails.length) return "";
-  return buildGmailCompose(emails.join(","), `Oficio asignado: ${item.folio}`, buildAssignmentMessage(item));
+  const calendarHref = googleCalendarForAssignment(item, people);
+  const body = [
+    buildAssignmentMessage(item),
+    "",
+    calendarHref ? `Agendar en Google Calendar: ${calendarHref}` : "",
+  ].filter(Boolean).join("\n");
+  return buildGmailCompose(emails.join(","), `Oficio asignado: ${item.folio}`, body);
 }
 
 function whatsappAssignmentLinks(item, people) {
@@ -1404,8 +1520,12 @@ function notifyDirector(item) {
   const actions = [];
   const gmail = buildDirectorGmail(item);
   const whatsapp = buildDirectorWhatsapp(item);
+  const calendarHref = googleCalendarForIncoming(item);
   if (channels.email && state.settings.directorEmail) {
     actions.push({ label: "Enviar Correo", href: gmail, target: "_blank", primary: true });
+  }
+  if (calendarHref) {
+    actions.push({ label: "Agendar en Google Calendar", href: calendarHref, target: "_blank" });
   }
   if (channels.whatsapp && whatsapp) {
     actions.push({ label: "Enviar WhatsApp", href: whatsapp, target: "_blank" });
@@ -1422,8 +1542,12 @@ function notifyAssignment(item) {
   const actions = [];
   const gmail = gmailAssignment(item, people);
   const whatsappLinks = whatsappAssignmentLinks(item, people);
+  const calendarHref = googleCalendarForAssignment(item, people);
   if (channels.email && gmail) {
     actions.push({ label: "Enviar Correo", href: gmail, target: "_blank", primary: true });
+  }
+  if (calendarHref) {
+    actions.push({ label: "Agendar en Google Calendar", href: calendarHref, target: "_blank" });
   }
   if (channels.whatsapp) {
     whatsappLinks.slice(0, 4).forEach((href, index) => {
@@ -1772,6 +1896,7 @@ function bindForms() {
       const form = event.currentTarget;
       state.settings.directorEmail = form.elements.directorEmail.value.trim();
       state.settings.directorPhone = normalizePhone(form.elements.directorPhone.value);
+      state.settings.adminDeleteKey = form.elements.adminDeleteKey.value.trim();
       state.settings.notifyEmail = form.elements.notifyEmail.checked;
       state.settings.notifyWhatsapp = form.elements.notifyWhatsapp.checked;
       state.settings.notifySystem = form.elements.notifySystem.checked;
@@ -1804,9 +1929,11 @@ function bindForms() {
       item.assignees = assignees;
       item.assignee = assignees.join(", ");
       item.assigneeIds = assignees
-        .map((name) => state.people.find((person) => person.name === name)?.id)
+        .map((name) => personByName(name)?.id)
         .filter(Boolean);
+      item.assigneeId = item.assigneeIds[0] || "";
       item.dueAt = data.dueAt;
+      item.instructions = String(data.instructions || "").trim();
       item.status = "Asignado";
       await put("incoming", item);
       dialog.close();
@@ -1868,6 +1995,7 @@ function bindLists() {
         option.querySelector("input[name='assignee']").disabled = !isSelected;
       });
       form.elements.dueAt.value = item.dueAt || "";
+      form.elements.instructions.value = item.instructions || "";
       renderAssignmentDocument(item);
       $("#assignmentDialog").showModal();
       return;
@@ -1891,6 +2019,15 @@ function bindLists() {
       form.elements.responseText.value = item.responseText || "";
       form.elements.responseDocument.value = "";
       $("#responseDialog").showModal();
+      return;
+    }
+
+    if (target.dataset.uploadIncomingDocument) {
+      const input = $("#incomingDocumentUpload");
+      if (!input) return;
+      input.value = "";
+      input.dataset.incomingId = target.dataset.uploadIncomingDocument;
+      input.click();
       return;
     }
 
@@ -1920,26 +2057,69 @@ function bindLists() {
     }
 
     if (target.dataset.deleteIncoming) {
-      if (!confirmAdminDelete()) return;
-      await remove("incoming", target.dataset.deleteIncoming);
-      await refresh();
+      const deleteKey = confirmAdminDelete();
+      if (!deleteKey) return;
+      state.pendingDeleteKey = deleteKey;
+      try {
+        await remove("incoming", target.dataset.deleteIncoming);
+        await refresh();
+      } catch (error) {
+        showMessage(`No se pudo borrar: ${describeError(error)}`, "error");
+      } finally {
+        state.pendingDeleteKey = "";
+      }
       return;
     }
 
     if (target.dataset.deleteOutgoing) {
-      if (!confirmAdminDelete()) return;
-      await remove("outgoing", target.dataset.deleteOutgoing);
-      await refresh();
+      const deleteKey = confirmAdminDelete();
+      if (!deleteKey) return;
+      state.pendingDeleteKey = deleteKey;
+      try {
+        await remove("outgoing", target.dataset.deleteOutgoing);
+        await refresh();
+      } catch (error) {
+        showMessage(`No se pudo borrar: ${describeError(error)}`, "error");
+      } finally {
+        state.pendingDeleteKey = "";
+      }
       return;
     }
 
     if (target.dataset.deletePerson) {
-      if (!confirmAdminDelete()) return;
-      await remove("people", target.dataset.deletePerson);
-      await refresh();
+      const deleteKey = confirmAdminDelete();
+      if (!deleteKey) return;
+      state.pendingDeleteKey = deleteKey;
+      try {
+        await remove("people", target.dataset.deletePerson);
+        await refresh();
+      } catch (error) {
+        showMessage(`No se pudo borrar: ${describeError(error)}`, "error");
+      } finally {
+        state.pendingDeleteKey = "";
+      }
       return;
     }
 
+  });
+
+  $("#incomingDocumentUpload")?.addEventListener("change", async (event) => {
+    const input = event.currentTarget;
+    const item = state.incoming.find((row) => row.id === input.dataset.incomingId);
+    const file = input.files?.[0];
+    if (!item || !file) return;
+    try {
+      requireRole("admin", "director", "ventanilla", "responsable");
+      item.document = await fileToRecord(file);
+      await put("incoming", item);
+      await refresh();
+      showMessage("Archivo del oficio actualizado correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo subir el archivo: ${describeError(error)}`, "error");
+    } finally {
+      input.value = "";
+      input.dataset.incomingId = "";
+    }
   });
 
   ["searchIncoming", "statusFilter", "priorityFilter", "assigneeFilter", "dueFilter", "searchOutgoing", "prefixFilter", "authorFilter"].forEach((id) => {
@@ -1964,6 +2144,7 @@ function excelRows() {
       estado: item.status,
       responsables: getAssigneeNames(item).join("; "),
       fecha_limite: item.dueAt || "",
+      instrucciones: assignmentNote(item),
       fecha_respuesta: item.responseAt || "",
       observaciones: item.notes || "",
       respuesta: item.responseText || "",
@@ -2026,6 +2207,7 @@ function importedFromWorkbook(workbook, XLSX) {
     status: row.estado || "Pendiente de asignacion",
     assignees: String(row.responsables || "").split(";").map((value) => value.trim()).filter(Boolean),
     dueAt: row.fecha_limite || "",
+    instructions: row.instrucciones || "",
     responseAt: row.fecha_respuesta || "",
     notes: row.observaciones || "",
     responseText: row.respuesta || "",

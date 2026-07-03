@@ -48,19 +48,49 @@
 
         <nav class="tabs" aria-label="Secciones">
           <button class="tab is-active" type="button" data-view="inbox">
-            <span aria-hidden="true">IN</span>
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M22 12h-6l-2 3h-4l-2-3H2"></path>
+                <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
+              </svg>
+            </span>
             Recibidos
           </button>
           <button class="tab" type="button" data-view="outgoing">
-            <span aria-hidden="true">#</span>
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="m22 2-7 20-4-9-9-4Z"></path>
+                <path d="M22 2 11 13"></path>
+              </svg>
+            </span>
             Expedidos
           </button>
           <button class="tab" type="button" data-view="calendar">
-            <span aria-hidden="true">CA</span>
-            Actividades
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M8 2v4"></path>
+                <path d="M16 2v4"></path>
+                <rect width="18" height="18" x="3" y="4" rx="2"></rect>
+                <path d="M3 10h18"></path>
+                <path d="M8 14h.01"></path>
+                <path d="M12 14h.01"></path>
+                <path d="M16 14h.01"></path>
+                <path d="M8 18h.01"></path>
+                <path d="M12 18h.01"></path>
+                <path d="M16 18h.01"></path>
+              </svg>
+            </span>
+            Calendario
           </button>
           <button class="tab" type="button" data-view="directory">
-            <span aria-hidden="true">PE</span>
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+            </span>
             Personal
           </button>
         </nav>
@@ -198,6 +228,7 @@
                 </div>
               </div>
               <div class="record-list" id="incomingList" aria-live="polite"></div>
+              <input id="incomingDocumentUpload" type="file" accept=".pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
             </section>
           </div>
         </section>
@@ -336,7 +367,7 @@
                 </div>
                 <label>
                   Clave para borrar registros
-                  <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Clave protegida" readonly>
+                  <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Define una clave para confirmar borrados">
                 </label>
                 <div class="form-actions">
                   <button class="button primary" type="submit">Guardar configuracion</button>
@@ -396,6 +427,10 @@
           Fecha limite
           <input name="dueAt" type="date">
         </label>
+        <label>
+          Notas para la asignacion
+          <textarea name="instructions" rows="3" placeholder="Indicaciones, puntos a revisar o contexto para el responsable"></textarea>
+        </label>
         <div class="assignment-document" id="assignmentDocument">
           <span>Documento recibido</span>
           <p>Este oficio no tiene escaneo adjunto.</p>
@@ -438,6 +473,6 @@
       </div>
     </template>
 
-    <script src="app.js?v=38" type="module"></script>
+    <script src="app.js?v=43" type="module"></script>
   </body>
 </html>

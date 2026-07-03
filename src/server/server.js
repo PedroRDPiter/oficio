@@ -168,6 +168,10 @@ function dateTime(value) {
   return String(value);
 }
 
+function normalizeText(value = "") {
+  return String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+}
+
 function personToApp(row) {
   return {
     id: row.id,
@@ -209,12 +213,19 @@ function incomingToApp(row, people = []) {
     assigneeId: row.asignado_a || "",
     assigneeIds: row.asignado_a ? [row.asignado_a] : [],
     dueAt: dateOnly(row.fecha_limite),
+    instructions: row.instrucciones || "",
     createdAt: dateTime(row.creado_en),
   };
 }
 
-function incomingToDb(item) {
-  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || null;
+function incomingToDb(item, people = []) {
+  const assigneeNames = Array.isArray(item.assignees)
+    ? item.assignees
+    : String(item.assignee || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+  const personFromName = assigneeNames
+    .map((name) => people.find((person) => normalizeText(person.nombre) === normalizeText(name)))
+    .find(Boolean);
+  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || personFromName?.id || null;
   return {
     id: uuidOrNew(item.id),
     folio: item.folio,
@@ -287,7 +298,7 @@ function settingsToDb(settings) {
     siguiente_numero: Number(settings.nextNumber) || 1,
     correo_director: settings.directorEmail || "dir.planeacionydu@gmail.com",
     telefono_director: settings.directorPhone || null,
-    clave_borrado: settings.adminDeleteKey || "deshabilitada",
+    clave_borrado: settings.adminDeleteKey || null,
     notificar_correo: Boolean(settings.notifyEmail),
     notificar_whatsapp: Boolean(settings.notifyWhatsapp),
     notificar_sistema: Boolean(settings.notifySystem),
@@ -345,12 +356,12 @@ async function putPostgresStore(store, value) {
          id, siguiente_numero, correo_director, telefono_director, clave_borrado,
          notificar_correo, notificar_whatsapp, notificar_sistema
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       values ($1, $2, $3, $4, coalesce($5, 'deshabilitada'), $6, $7, $8)
        on conflict (id) do update set
          siguiente_numero = excluded.siguiente_numero,
          correo_director = excluded.correo_director,
          telefono_director = excluded.telefono_director,
-         clave_borrado = excluded.clave_borrado,
+         clave_borrado = coalesce(excluded.clave_borrado, configuracion.clave_borrado),
          notificar_correo = excluded.notificar_correo,
          notificar_whatsapp = excluded.notificar_whatsapp,
          notificar_sistema = excluded.notificar_sistema
@@ -370,7 +381,8 @@ async function putPostgresStore(store, value) {
   }
 
   if (store === "incoming") {
-    const payload = incomingToDb(value);
+    const people = await getPeopleRows();
+    const payload = incomingToDb(value, people);
     const { rows } = await pgPool.query(
       `insert into oficios_recibidos (
          id, folio, fecha_recepcion, remitente, asunto, prioridad, estado,
@@ -418,7 +430,6 @@ async function putPostgresStore(store, value) {
         payload.creado_en,
       ],
     );
-    const people = await getPeopleRows();
     return incomingToApp(rows[0], people);
   }
 
@@ -773,7 +784,7 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
     "Referrer-Policy": "same-origin",
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Delete-Key",
   });
   res.end(body);
 }
@@ -810,9 +821,35 @@ async function readJsonBody(req) {
 }
 
 function isApiAuthorized(req) {
-  if (!API_TOKEN) return false;
+  if (!API_TOKEN) return true;
   const authorization = req.headers.authorization || "";
   return authorization === `Bearer ${API_TOKEN}`;
+}
+
+function secureCompare(value, expected) {
+  const left = Buffer.from(String(value || ""));
+  const right = Buffer.from(String(expected || ""));
+  if (!left.length || !right.length || left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+async function configuredDeleteKey() {
+  if (process.env.DELETE_PASSWORD) return process.env.DELETE_PASSWORD;
+  if (pgPool) {
+    const { rows } = await pgPool.query("select clave_borrado from configuracion where id = $1", ["main"]);
+    return rows[0]?.clave_borrado || "";
+  }
+  return readData().settings?.find((item) => item.id === "main")?.adminDeleteKey || "";
+}
+
+async function assertDeleteAuthorized(req) {
+  const expected = await configuredDeleteKey();
+  if (!expected || expected === "deshabilitada") {
+    throw httpError(403, "Configura una contrasena de borrado antes de eliminar registros");
+  }
+  if (!secureCompare(req.headers["x-delete-key"], expected)) {
+    throw httpError(403, "Contrasena de borrado incorrecta");
+  }
 }
 
 function requiredText(value, field) {
@@ -1052,6 +1089,10 @@ async function handleApi(req, res) {
       return;
     }
     const data = readData();
+    if (store === "settings" && !record.adminDeleteKey) {
+      const currentSettings = data.settings.find((item) => item.id === id);
+      record.adminDeleteKey = currentSettings?.adminDeleteKey || "";
+    }
     const index = data[store].findIndex((item) => item.id === id);
     if (index >= 0) data[store][index] = record;
     else data[store].push(record);
@@ -1062,6 +1103,7 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "DELETE" && id) {
+    await assertDeleteAuthorized(req);
     if (pgPool) {
       await deletePostgresStore(store, id);
       appendAudit(req, "delete", store, id);

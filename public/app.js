@@ -74,7 +74,6 @@ let supabaseStatus = "not-configured";
 let supabase = null;
 let currentUser = null;
 let currentProfile = null;
-let particleCleanup = null;
 let calendarCursor = new Date(`${today()}T00:00:00`);
 let state = {
   incoming: [],
@@ -1637,87 +1636,6 @@ function showAuthScreen(show) {
   if (appShell) appShell.hidden = show;
   const logoutBtn = $("#logoutBtn");
   if (logoutBtn) logoutBtn.hidden = show || !supabaseOnline;
-  if (show) startParticles();
-  else stopParticles();
-}
-
-function startParticles() {
-  if (particleCleanup || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const canvas = $("#particleCanvas");
-  if (!canvas) return;
-  const context = canvas.getContext("2d");
-  if (!context) return;
-
-  let width = 0;
-  let height = 0;
-  let frame = 0;
-  let particles = [];
-  const palette = ["rgba(255,255,255,0.72)", "rgba(240,228,207,0.7)", "rgba(128,181,156,0.55)"];
-
-  function resize() {
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-    width = canvas.clientWidth;
-    height = canvas.clientHeight;
-    canvas.width = Math.floor(width * pixelRatio);
-    canvas.height = Math.floor(height * pixelRatio);
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    const count = Math.max(28, Math.min(82, Math.floor((width * height) / 13500)));
-    particles = Array.from({ length: count }, () => ({
-      x: Math.random() * width,
-      y: Math.random() * height,
-      vx: (Math.random() - 0.5) * 0.28,
-      vy: (Math.random() - 0.5) * 0.28,
-      radius: 1.2 + Math.random() * 2.4,
-      color: palette[Math.floor(Math.random() * palette.length)],
-    }));
-  }
-
-  function tick() {
-    context.clearRect(0, 0, width, height);
-    particles.forEach((particle, index) => {
-      particle.x += particle.vx;
-      particle.y += particle.vy;
-      if (particle.x < -10) particle.x = width + 10;
-      if (particle.x > width + 10) particle.x = -10;
-      if (particle.y < -10) particle.y = height + 10;
-      if (particle.y > height + 10) particle.y = -10;
-
-      context.beginPath();
-      context.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2);
-      context.fillStyle = particle.color;
-      context.fill();
-
-      for (let next = index + 1; next < particles.length; next += 1) {
-        const other = particles[next];
-        const dx = particle.x - other.x;
-        const dy = particle.y - other.y;
-        const distance = Math.hypot(dx, dy);
-        if (distance < 115) {
-          context.beginPath();
-          context.moveTo(particle.x, particle.y);
-          context.lineTo(other.x, other.y);
-          context.strokeStyle = `rgba(255,255,255,${0.12 * (1 - distance / 115)})`;
-          context.lineWidth = 1;
-          context.stroke();
-        }
-      }
-    });
-    frame = requestAnimationFrame(tick);
-  }
-
-  resize();
-  window.addEventListener("resize", resize);
-  frame = requestAnimationFrame(tick);
-  particleCleanup = () => {
-    cancelAnimationFrame(frame);
-    window.removeEventListener("resize", resize);
-    context.clearRect(0, 0, width, height);
-    particleCleanup = null;
-  };
-}
-
-function stopParticles() {
-  if (particleCleanup) particleCleanup();
 }
 
 function bindAuth() {
@@ -2352,7 +2270,7 @@ function bindLiveRefresh() {
       refreshing = false;
     }
   };
-  setInterval(run, 6000);
+  setInterval(run, 30000);
   window.addEventListener("focus", run);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) run();

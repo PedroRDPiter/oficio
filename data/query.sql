@@ -50,6 +50,16 @@ create table configuracion (
   notificar_sistema boolean not null default true
 );
 
+create table agenda_registros (
+  id uuid primary key default gen_random_uuid(),
+  titulo text not null,
+  fecha date not null,
+  hora time,
+  participantes text[] not null default '{}',
+  notas text,
+  creado_en timestamptz default now()
+);
+
 insert into configuracion (id, siguiente_numero, correo_director)
 values ('main', 1, 'director@municipio.gob.mx')
 on conflict (id) do nothing;

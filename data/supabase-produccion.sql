@@ -26,11 +26,22 @@ add column if not exists notificar_correo boolean not null default true,
 add column if not exists notificar_whatsapp boolean not null default false,
 add column if not exists notificar_sistema boolean not null default true;
 
+create table if not exists agenda_registros (
+  id uuid primary key default gen_random_uuid(),
+  titulo text not null,
+  fecha date not null,
+  hora time,
+  participantes text[] not null default '{}',
+  notas text,
+  creado_en timestamptz default now()
+);
+
 alter table perfiles enable row level security;
 alter table personal enable row level security;
 alter table oficios_recibidos enable row level security;
 alter table oficios_generados enable row level security;
 alter table configuracion enable row level security;
+alter table agenda_registros enable row level security;
 
 create or replace function public.mi_rol()
 returns text
@@ -70,6 +81,10 @@ drop policy if exists "generados_update" on oficios_generados;
 drop policy if exists "generados_delete" on oficios_generados;
 drop policy if exists "configuracion_select" on configuracion;
 drop policy if exists "configuracion_update" on configuracion;
+drop policy if exists "agenda_select" on agenda_registros;
+drop policy if exists "agenda_insert" on agenda_registros;
+drop policy if exists "agenda_update" on agenda_registros;
+drop policy if exists "agenda_delete" on agenda_registros;
 drop policy if exists "perfiles_select" on perfiles;
 drop policy if exists "perfiles_insert" on perfiles;
 drop policy if exists "perfiles_update" on perfiles;
@@ -180,6 +195,27 @@ on configuracion for update
 to authenticated
 using (public.mi_rol() in ('admin', 'director'))
 with check (public.mi_rol() in ('admin', 'director'));
+
+create policy "agenda_select"
+on agenda_registros for select
+to authenticated
+using (true);
+
+create policy "agenda_insert"
+on agenda_registros for insert
+to authenticated
+with check (public.mi_rol() in ('admin', 'director', 'ventanilla', 'responsable'));
+
+create policy "agenda_update"
+on agenda_registros for update
+to authenticated
+using (public.mi_rol() in ('admin', 'director', 'ventanilla', 'responsable'))
+with check (public.mi_rol() in ('admin', 'director', 'ventanilla', 'responsable'));
+
+create policy "agenda_delete"
+on agenda_registros for delete
+to authenticated
+using (public.mi_rol() in ('admin', 'director'));
 
 drop policy if exists "documentos_select" on storage.objects;
 drop policy if exists "documentos_insert" on storage.objects;

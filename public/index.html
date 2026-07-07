@@ -13,7 +13,7 @@
     <section class="auth-screen" id="authScreen" hidden>
       <form class="panel auth-panel" id="authForm">
         <div class="brand auth-brand">
-          <div class="brand-mark" aria-hidden="true">O</div>
+          <img class="brand-mark" src="logoDPDU.png" alt="" aria-hidden="true">
           <div>
             <strong>Control de Oficios</strong>
             <span>Direccion de Planeacion y Desarrollo Urbano</span>
@@ -38,7 +38,7 @@
     <div class="app-shell">
       <aside class="sidebar" aria-label="Navegacion principal">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true">O</div>
+          <img class="brand-mark" src="logoDPDU.png" alt="" aria-hidden="true">
           <div>
             <strong>Oficios</strong>
             <span>DPDU</span>
@@ -308,7 +308,7 @@
             <div class="panel-heading calendar-toolbar">
               <div>
                 <h2>Calendario de actividades</h2>
-                <span class="subtle-text">Vencimientos por responsable con colores de usuario</span>
+                <span class="subtle-text">Da clic en un dia para ver detalles o agregar actividad</span>
               </div>
               <div class="calendar-controls">
                 <button class="button ghost" type="button" id="calendarPrev">Anterior</button>
@@ -465,6 +465,58 @@
       </form>
     </dialog>
 
+    <dialog id="calendarDayDialog">
+      <div class="dialog-body">
+        <div class="panel-heading">
+          <div>
+            <h2 id="calendarDayTitle">Actividades del dia</h2>
+            <span class="subtle-text" id="calendarDaySummary">Sin actividades registradas</span>
+          </div>
+          <button class="icon-button" aria-label="Cerrar" type="button" data-close-calendar-day-dialog>x</button>
+        </div>
+        <div class="calendar-day-details" id="calendarDayDetails"></div>
+        <div class="form-actions">
+          <button class="button ghost" type="button" data-close-calendar-day-dialog>Cerrar</button>
+          <button class="button primary" type="button" id="calendarAddActivityBtn">Agregar actividad</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="agendaDialog">
+      <form id="agendaForm" class="dialog-body">
+        <div class="panel-heading">
+          <h2>Crear registro en agenda</h2>
+          <button class="icon-button" value="cancel" aria-label="Cerrar" type="button" data-close-agenda-dialog>x</button>
+        </div>
+        <label>
+          Asunto o actividad
+          <input name="title" autocapitalize="sentences" placeholder="Reunion, visita, revision..." required>
+        </label>
+        <div class="field-grid">
+          <label>
+            Fecha
+            <input name="date" type="date" required>
+          </label>
+          <label>
+            Hora
+            <input name="time" type="time" required>
+          </label>
+        </div>
+        <fieldset class="assignee-picker">
+          <legend>Participantes</legend>
+          <div class="assignee-list" id="agendaParticipantChecklist"></div>
+        </fieldset>
+        <label>
+          Notas
+          <textarea name="notes" rows="3" placeholder="Lugar, indicaciones o acuerdos"></textarea>
+        </label>
+        <div class="form-actions">
+          <button class="button ghost" type="button" data-close-agenda-dialog>Cancelar</button>
+          <button class="button primary" type="submit">Guardar en agenda</button>
+        </div>
+      </form>
+    </dialog>
+
     <template id="emptyTemplate">
       <div class="empty-state">
         <strong>Sin registros</strong>
@@ -472,6 +524,6 @@
       </div>
     </template>
 
-    <script src="app.js?v=43" type="module"></script>
+    <script src="app.js?v=45" type="module"></script>
   </body>
 </html>

@@ -58,6 +58,16 @@ create table if not exists configuracion (
   notificar_sistema boolean not null default true
 );
 
+create table if not exists agenda_registros (
+  id uuid primary key default gen_random_uuid(),
+  titulo text not null,
+  fecha date not null,
+  hora time,
+  participantes text[] not null default '{}',
+  notas text,
+  creado_en timestamptz not null default now()
+);
+
 insert into configuracion (
   id,
   siguiente_numero,

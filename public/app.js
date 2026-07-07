@@ -2,9 +2,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { LOCAL_DOCUMENT_SERVER_URL, SUPABASE_ANON_KEY, SUPABASE_DOCUMENT_BUCKET, SUPABASE_URL } from "./supabase-config.js";
 
 const DB_NAME = "oficios-pwa";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const DATA_SCHEMA_VERSION = 1;
-const STORES = ["incoming", "outgoing", "people", "settings"];
+const STORES = ["incoming", "outgoing", "people", "settings", "agenda"];
 const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 const ALLOWED_DOCUMENT_TYPES = new Set([
   "application/pdf",
@@ -78,6 +78,7 @@ let calendarCursor = new Date(`${today()}T00:00:00`);
 let state = {
   incoming: [],
   outgoing: [],
+  agenda: [],
   people: [],
   settings: { ...DEFAULT_SETTINGS },
 };
@@ -86,6 +87,7 @@ const SUPABASE_TABLES = {
   people: "personal",
   incoming: "oficios_recibidos",
   outgoing: "oficios_generados",
+  agenda: "agenda_registros",
   settings: "configuracion",
 };
 
@@ -435,6 +437,30 @@ function outgoingToDb(item) {
   };
 }
 
+function agendaToApp(row) {
+  return {
+    id: row.id,
+    title: row.titulo,
+    date: row.fecha,
+    time: String(row.hora || "").slice(0, 5),
+    participants: Array.isArray(row.participantes) ? row.participantes : [],
+    notes: row.notas || "",
+    createdAt: row.creado_en || new Date().toISOString(),
+  };
+}
+
+function agendaToDb(item) {
+  return {
+    id: supabaseRecordId(item.id),
+    titulo: item.title,
+    fecha: item.date,
+    hora: item.time || null,
+    participantes: Array.isArray(item.participants) ? item.participants.filter(Boolean) : [],
+    notas: item.notes || null,
+    creado_en: item.createdAt || new Date().toISOString(),
+  };
+}
+
 function settingsToApp(row) {
   return {
     id: row.id,
@@ -649,6 +675,12 @@ async function supabaseGetAll(store) {
     return data.map(outgoingToApp);
   }
 
+  if (store === "agenda") {
+    const { data, error } = await supabase.from(SUPABASE_TABLES.agenda).select("*").order("fecha").order("hora");
+    if (error) throw error;
+    return data.map(agendaToApp);
+  }
+
   return [];
 }
 
@@ -675,6 +707,10 @@ async function supabasePut(store, value) {
   if (store === "incoming") {
     requireRole("admin", "director", "ventanilla", "responsable");
     payload = await incomingToDb(value);
+  }
+  if (store === "agenda") {
+    requireRole("admin", "director", "ventanilla", "responsable");
+    payload = agendaToDb(value);
   }
   if (store === "settings") {
     requireRole("admin", "director");
@@ -708,6 +744,7 @@ async function supabasePut(store, value) {
 async function supabaseRemove(store, id) {
   if (store === "people" || store === "outgoing") requireRole("admin");
   if (store === "incoming") requireRole("admin", "director");
+  if (store === "agenda") requireRole("admin", "director", "ventanilla", "responsable");
   const { error } = await supabase.from(SUPABASE_TABLES[store]).delete().eq("id", id);
   if (error) throw error;
 }
@@ -809,6 +846,29 @@ function getAssigneeNames(item) {
     if (person) return [person.name];
   }
   return [];
+}
+
+function getAgendaParticipants(item) {
+  if (Array.isArray(item.participants)) return item.participants.filter(Boolean);
+  return String(item.participants || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+}
+
+function agendaColor(item) {
+  return userColor(getAgendaParticipants(item)[0] || "Agenda");
+}
+
+function normalizeAgendaItem(item) {
+  const participants = getAgendaParticipants(item);
+  return {
+    ...item,
+    id: item.id || uid(),
+    title: item.title || item.titulo || "Registro de agenda",
+    date: item.date || item.fecha || today(),
+    time: String(item.time || item.hora || "").slice(0, 5),
+    participants,
+    notes: item.notes || item.notas || "",
+    createdAt: item.createdAt || item.creado_en || new Date().toISOString(),
+  };
 }
 
 function assignmentNote(item) {
@@ -947,12 +1007,14 @@ async function loadState() {
     await seedPeople();
     state.people = await getAll("people");
   }
-  const [incoming, outgoing] = await Promise.all([
+  const [incoming, outgoing, agenda] = await Promise.all([
     getAll("incoming"),
     getAll("outgoing"),
+    getAll("agenda"),
   ]);
   state.incoming = incoming.map(normalizeIncomingItem).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.outgoing = outgoing.sort((a, b) => b.number - a.number);
+  state.agenda = agenda.map(normalizeAgendaItem).sort((a, b) => `${a.date}T${a.time || "99:99"}`.localeCompare(`${b.date}T${b.time || "99:99"}`));
   render();
 }
 
@@ -980,11 +1042,13 @@ function renderPermissions() {
   const canConfigure = hasRole("admin", "director");
   const canCreateIncoming = hasRole("admin", "director", "ventanilla");
   const canCreateOutgoing = hasRole("admin", "director", "ventanilla");
+  const canCreateAgenda = hasRole("admin", "director", "ventanilla", "responsable");
   const canMoveData = hasRole("admin", "director");
   $("#personForm").hidden = supabaseOnline && !canManagePeople;
   $("#settingsForm").hidden = supabaseOnline && !canConfigure;
   $("#incomingForm").hidden = supabaseOnline && !canCreateIncoming;
   $("#outgoingForm").hidden = supabaseOnline && !canCreateOutgoing;
+  $("#agendaForm").hidden = supabaseOnline && !canCreateAgenda;
   $("#exportBtn").hidden = supabaseOnline && !canMoveData;
   const importLabel = $("#importInput")?.closest("label");
   if (importLabel) importLabel.hidden = supabaseOnline && !canMoveData;
@@ -1111,6 +1175,12 @@ function renderIncoming() {
   }).join("");
 }
 
+function outgoingAuthorLabel(item) {
+  if (item.author) return item.author;
+  const person = state.people.find((row) => row.id === item.authorId);
+  return person?.name || "Sin responsable";
+}
+
 function renderOutgoing() {
   const list = $("#outgoingList");
   const q = normalize($("#searchOutgoing").value);
@@ -1133,8 +1203,7 @@ function renderOutgoing() {
       <div class="meta">
         <span class="prefix-pill" style="${escapeHtml(prefixStyle(item.prefix))}">${escapeHtml(normalizePrefix(item.prefix))}</span>
         <span class="meta-chip">Para: ${escapeHtml(item.recipient)}</span>
-        <span class="meta-chip">Elabora: ${escapeHtml(item.author)}</span>
-        <span class="meta-chip">Guardado: ${escapeHtml(storageModeLabel())}</span>
+        <span class="meta-chip">Realizo: ${escapeHtml(outgoingAuthorLabel(item))}</span>
         ${item.document ? `<span class="meta-chip">Oficio guardado</span>` : ""}
       </div>
       <div class="card-actions">
@@ -1150,6 +1219,9 @@ function renderCalendar() {
   const pending = state.incoming
     .filter((item) => item.dueAt && item.status !== "Respondido")
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+  const agendaRows = state.agenda
+    .slice()
+    .sort((a, b) => `${a.date}T${a.time || "99:99"}`.localeCompare(`${b.date}T${b.time || "99:99"}`));
 
   const renderList = (list) => {
     if (!list) return;
@@ -1183,7 +1255,10 @@ function renderCalendar() {
 
   const legend = $("#calendarLegend");
   if (legend) {
-    const names = [...new Set(pending.flatMap((item) => getAssigneeNames(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const names = [...new Set([
+      ...pending.flatMap((item) => getAssigneeNames(item)),
+      ...agendaRows.flatMap((item) => getAgendaParticipants(item)),
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
     legend.innerHTML = names.length
       ? names.map((name) => `<span class="legend-chip" style="--user-color: ${userColor(name)}">${escapeHtml(name)}</span>`).join("")
       : `<span class="legend-chip" style="--user-color: ${userColor("Sin asignar")}">Sin asignar</span>`;
@@ -1198,9 +1273,10 @@ function renderCalendar() {
     const cellDate = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), dayNumber);
     const isoDate = inMonth ? cellDate.toISOString().slice(0, 10) : "";
     const items = inMonth ? pending.filter((item) => item.dueAt === isoDate) : [];
+    const agendaItems = inMonth ? agendaRows.filter((item) => item.date === isoDate) : [];
     const isToday = isoDate === today();
     return `
-      <div class="month-day${inMonth ? "" : " muted"}${isToday ? " today" : ""}">
+      <div class="month-day${inMonth ? "" : " muted"}${isToday ? " today" : ""}" ${inMonth ? `data-agenda-date="${escapeHtml(isoDate)}" role="button" tabindex="0" aria-label="Ver actividades de ${escapeHtml(isoDate)}"` : ""}>
         <span class="day-number">${inMonth ? dayNumber : ""}</span>
         <div class="day-activities">
           ${items.map((item) => `
@@ -1208,6 +1284,13 @@ function renderCalendar() {
               <strong>${escapeHtml(item.folio)}</strong>
               <span>Asignado a: ${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
               ${assignmentNote(item) ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(assignmentNote(item))}</p>` : ""}
+            </article>
+          `).join("")}
+          ${agendaItems.map((item) => `
+            <article class="day-activity agenda-activity" style="--user-color: ${agendaColor(item)}" title="${escapeHtml(`${item.title}\nParticipan: ${getAgendaParticipants(item).join(", ") || "Sin participantes"}${item.notes ? `\nNotas: ${item.notes}` : ""}`)}">
+              <strong>${escapeHtml(item.time || "Agenda")} - ${escapeHtml(item.title)}</strong>
+              <span>${escapeHtml(getAgendaParticipants(item).join(", ") || "Sin participantes")}</span>
+              ${item.notes ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(item.notes)}</p>` : ""}
             </article>
           `).join("")}
         </div>
@@ -1218,6 +1301,89 @@ function renderCalendar() {
     ${weekdays.map((day) => `<div class="month-weekday">${day}</div>`).join("")}
     ${dayCells}
   `;
+}
+
+function calendarDateLabel(dateValue) {
+  const date = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return dateValue;
+  return date.toLocaleDateString("es-MX", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function activitiesForDate(dateValue) {
+  const pending = state.incoming
+    .filter((item) => item.dueAt === dateValue && item.status !== "Respondido")
+    .sort((a, b) => a.folio.localeCompare(b.folio));
+  const agendaRows = state.agenda
+    .filter((item) => item.date === dateValue)
+    .sort((a, b) => `${a.time || "99:99"}`.localeCompare(`${b.time || "99:99"}`));
+  return { pending, agendaRows };
+}
+
+function renderCalendarDayDetails(dateValue) {
+  const dialog = $("#calendarDayDialog");
+  const details = $("#calendarDayDetails");
+  const title = $("#calendarDayTitle");
+  const summary = $("#calendarDaySummary");
+  const addButton = $("#calendarAddActivityBtn");
+  if (!dialog || !details || !title || !summary || !addButton) return;
+
+  const { pending, agendaRows } = activitiesForDate(dateValue);
+  const total = pending.length + agendaRows.length;
+  title.textContent = calendarDateLabel(dateValue);
+  summary.textContent = total
+    ? `${total} actividad${total === 1 ? "" : "es"} en este dia`
+    : "No hay actividad registrada para este dia";
+  addButton.dataset.agendaDate = dateValue;
+
+  if (!total) {
+    details.innerHTML = `
+      <div class="empty-state compact">
+        <strong>Sin actividad</strong>
+        <span>Puedes agregar una actividad para esta fecha.</span>
+      </div>
+    `;
+    return;
+  }
+
+  details.innerHTML = `
+    ${pending.map((item) => `
+      <article class="calendar-detail-card${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}">
+        <div class="calendar-detail-heading">
+          <span class="badge">Respuesta pendiente</span>
+          <strong>${escapeHtml(item.folio)}</strong>
+        </div>
+        <p>${escapeHtml(item.subject)}</p>
+        <div class="meta">
+          <span class="meta-chip">Remitente: ${escapeHtml(item.sender)}</span>
+          <span class="meta-chip">Asignado a: ${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
+          ${dueSummary(item) ? `<span class="meta-chip due-chip${dueClass(item)}">${escapeHtml(dueSummary(item))}</span>` : ""}
+        </div>
+        ${assignmentNote(item) ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(assignmentNote(item))}</p>` : ""}
+      </article>
+    `).join("")}
+    ${agendaRows.map((item) => `
+      <article class="calendar-detail-card agenda-detail-card" style="--user-color: ${agendaColor(item)}">
+        <div class="calendar-detail-heading">
+          <span class="badge">Agenda</span>
+          <strong>${escapeHtml(item.time || "Sin hora")} - ${escapeHtml(item.title)}</strong>
+        </div>
+        <div class="meta">
+          <span class="meta-chip">Participan: ${escapeHtml(getAgendaParticipants(item).join(", ") || "Sin participantes")}</span>
+        </div>
+        ${item.notes ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(item.notes)}</p>` : ""}
+      </article>
+    `).join("")}
+  `;
+}
+
+function openCalendarDayDialog(dateValue) {
+  renderCalendarDayDetails(dateValue);
+  $("#calendarDayDialog")?.showModal();
 }
 
 function renderEmpty(list) {
@@ -1251,6 +1417,18 @@ function fillSelects() {
     assigneeChecklist.innerHTML = state.people.map((person) => `
       <button class="assignee-option" type="button" data-assignee="${escapeHtml(person.name)}" aria-pressed="false">
         <input type="hidden" name="assignee" value="${escapeHtml(person.name)}" disabled>
+        <span>
+          <strong>${escapeHtml(person.name)}</strong>
+          <small>${escapeHtml(person.role || "Sin cargo")}</small>
+        </span>
+      </button>
+    `).join("");
+  }
+  const agendaChecklist = $("#agendaParticipantChecklist");
+  if (agendaChecklist) {
+    agendaChecklist.innerHTML = state.people.map((person) => `
+      <button class="assignee-option" type="button" data-participant="${escapeHtml(person.name)}" aria-pressed="false">
+        <input type="hidden" name="participant" value="${escapeHtml(person.name)}" disabled>
         <span>
           <strong>${escapeHtml(person.name)}</strong>
           <small>${escapeHtml(person.role || "Sin cargo")}</small>
@@ -1603,7 +1781,36 @@ async function saveSettings() {
 }
 
 async function refresh() {
-  await loadState();
+  setAppLoading(true);
+  try {
+    await loadState();
+  } finally {
+    setAppLoading(false);
+  }
+}
+
+function setAppLoading(loading) {
+  const appShell = $(".app-shell");
+  if (!appShell) return;
+  appShell.classList.toggle("is-loading", loading);
+  appShell.setAttribute("aria-busy", String(loading));
+}
+
+function setButtonLoading(button, loading, label = "Cargando...") {
+  if (!button) return;
+  if (loading) {
+    button.dataset.originalText = button.textContent;
+    button.textContent = label;
+    button.classList.add("is-loading");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    return;
+  }
+  button.textContent = button.dataset.originalText || button.textContent;
+  delete button.dataset.originalText;
+  button.classList.remove("is-loading");
+  button.disabled = false;
+  button.removeAttribute("aria-busy");
 }
 
 function showMessage(message, type = "info") {
@@ -1644,6 +1851,8 @@ function bindAuth() {
   if (authForm) {
     authForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const submitter = event.submitter;
+      setButtonLoading(submitter, true, "Entrando...");
       try {
         if (!supabase) throw new Error("Supabase no esta configurado.");
         const form = event.currentTarget;
@@ -1661,6 +1870,8 @@ function bindAuth() {
         showMessage("Sesion iniciada.", "success");
       } catch (error) {
         showMessage(`No se pudo iniciar sesion: ${describeError(error)}`, "error");
+      } finally {
+        setButtonLoading(submitter, false);
       }
     });
   }
@@ -1700,10 +1911,60 @@ function bindCalendarControls() {
     calendarCursor = new Date(`${today()}T00:00:00`);
     renderCalendar();
   });
+  $("#monthCalendar")?.addEventListener("click", (event) => {
+    const day = event.target.closest("[data-agenda-date]");
+    if (day) openCalendarDayDialog(day.dataset.agendaDate);
+  });
+  $("#monthCalendar")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const day = event.target.closest("[data-agenda-date]");
+    if (!day) return;
+    event.preventDefault();
+    openCalendarDayDialog(day.dataset.agendaDate);
+  });
+  $("#calendarAddActivityBtn")?.addEventListener("click", (event) => {
+    const dateValue = event.currentTarget.dataset.agendaDate || today();
+    $("#calendarDayDialog")?.close();
+    openAgendaDialog(dateValue);
+  });
+  $$("[data-close-calendar-day-dialog]").forEach((button) => {
+    button.addEventListener("click", () => {
+      $("#calendarDayDialog")?.close();
+    });
+  });
+}
+
+function nextQuarterHour() {
+  const now = new Date();
+  now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function resetAgendaForm() {
+  const form = $("#agendaForm");
+  if (!form) return;
+  form.reset();
+  form.dataset.dirty = "false";
+  form.elements.date.value = today();
+  form.elements.time.value = nextQuarterHour();
+  $$(".assignee-option", form).forEach((option) => {
+    option.classList.remove("is-selected");
+    option.setAttribute("aria-pressed", "false");
+    const input = option.querySelector("input[name='participant']");
+    if (input) input.disabled = true;
+  });
+}
+
+function openAgendaDialog(dateValue = today()) {
+  resetAgendaForm();
+  const form = $("#agendaForm");
+  if (form) form.elements.date.value = dateValue;
+  $("#calendarDayDialog")?.close();
+  $("#agendaDialog")?.showModal();
 }
 
 function bindForms() {
-  const trackedForms = ["incomingForm", "outgoingForm", "personForm", "settingsForm"];
+  const trackedForms = ["incomingForm", "outgoingForm", "personForm", "settingsForm", "agendaForm"];
   trackedForms.forEach((id) => {
     const form = $(`#${id}`);
     if (!form) return;
@@ -1716,6 +1977,9 @@ function bindForms() {
 
   $("#incomingForm").elements.receivedAt.value = today();
   $("#outgoingForm").elements.createdAt.value = today();
+  if ($("#agendaForm")) {
+    resetAgendaForm();
+  }
   ["prefix", "createdAt"].forEach((name) => {
     $("#outgoingForm").elements[name].addEventListener("input", renderStats);
   });
@@ -1726,6 +1990,8 @@ function bindForms() {
 
   $("#incomingForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
     try {
       const form = event.currentTarget;
       const data = Object.fromEntries(new FormData(form));
@@ -1751,11 +2017,15 @@ function bindForms() {
       openDirectorEmail(item);
     } catch (error) {
       showMessage(`No se pudo guardar el oficio: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
     }
   });
 
   $("#outgoingForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
     try {
       const form = event.currentTarget;
       const data = Object.fromEntries(new FormData(form));
@@ -1763,6 +2033,7 @@ function bindForms() {
       const number = nextOutgoingNumber(prefix, data.createdAt);
       const year = outgoingYear(data.createdAt);
       const documentFile = form.elements.document?.files[0];
+      const authorPerson = state.people.find((person) => person.name === data.author);
       const item = {
         id: uid(),
         number,
@@ -1772,6 +2043,7 @@ function bindForms() {
         recipient: data.recipient.trim(),
         subject: data.subject.trim(),
         author: data.author,
+        authorId: authorPerson?.id || "",
         document: await fileToRecord(documentFile),
       };
       await createOutgoing(item);
@@ -1784,11 +2056,48 @@ function bindForms() {
       showMessage("Consecutivo guardado correctamente.", "success");
     } catch (error) {
       showMessage(`No se pudo guardar el consecutivo: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
+    }
+  });
+
+  $("#agendaForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
+    try {
+      const form = event.currentTarget;
+      const formData = new FormData(form);
+      const participants = formData.getAll("participant").filter(Boolean);
+      if (!participants.length) {
+        showMessage("Selecciona al menos un participante para la agenda.", "error");
+        return;
+      }
+      const item = {
+        id: uid(),
+        title: String(formData.get("title") || "").trim(),
+        date: formData.get("date"),
+        time: formData.get("time"),
+        participants,
+        notes: String(formData.get("notes") || "").trim(),
+        createdAt: new Date().toISOString(),
+      };
+      await put("agenda", item);
+      resetAgendaForm();
+      $("#agendaDialog")?.close();
+      await refresh();
+      showMessage("Registro agregado a la agenda.", "success");
+    } catch (error) {
+      showMessage(`No se pudo guardar en agenda: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
     }
   });
 
   $("#personForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
     try {
       const form = event.currentTarget;
       const data = Object.fromEntries(new FormData(form));
@@ -1805,11 +2114,15 @@ function bindForms() {
       showMessage("Persona guardada correctamente.", "success");
     } catch (error) {
       showMessage(`No se pudo guardar la persona: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
     }
   });
 
   $("#settingsForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
     try {
       const form = event.currentTarget;
       state.settings.directorEmail = form.elements.directorEmail.value.trim();
@@ -1824,6 +2137,8 @@ function bindForms() {
       showMessage("Configuracion guardada correctamente.", "success");
     } catch (error) {
       showMessage(`No se pudo guardar la configuracion: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
     }
   });
 
@@ -1832,6 +2147,8 @@ function bindForms() {
   $("#assignmentForm").addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "assign") return;
     event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
     try {
       requireRole("admin", "director");
       const dialog = $("#assignmentDialog");
@@ -1860,12 +2177,16 @@ function bindForms() {
       openAssignmentNotifications(item);
     } catch (error) {
       showMessage(`No se pudo guardar la asignacion: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
     }
   });
 
   $("#responseForm").addEventListener("submit", async (event) => {
     if (event.submitter?.value !== "save-response") return;
     event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
     try {
       requireRole("admin", "director", "ventanilla", "responsable");
       const form = event.currentTarget;
@@ -1884,6 +2205,8 @@ function bindForms() {
       showMessage("Respuesta guardada correctamente.", "success");
     } catch (error) {
       showMessage(`No se pudo guardar la respuesta: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
     }
   });
 }
@@ -1896,6 +2219,12 @@ function bindLists() {
     if (target.dataset.closeNotification !== undefined) {
       const center = $("#notificationCenter");
       if (center) center.hidden = true;
+      return;
+    }
+
+    if (target.dataset.closeAgendaDialog !== undefined) {
+      resetAgendaForm();
+      $("#agendaDialog")?.close();
       return;
     }
 
@@ -1920,7 +2249,7 @@ function bindLists() {
     }
 
     if (target.classList.contains("assignee-option")) {
-      const input = target.querySelector("input[name='assignee']");
+      const input = target.querySelector("input[name='assignee'], input[name='participant']");
       const isSelected = target.getAttribute("aria-pressed") === "true";
       target.classList.toggle("is-selected", !isSelected);
       target.setAttribute("aria-pressed", String(!isSelected));
@@ -1956,11 +2285,14 @@ function bindLists() {
     }
 
     if (target.dataset.downloadOutgoingWord) {
+      setButtonLoading(target, true, "Descargando...");
       try {
         const item = state.outgoing.find((row) => row.id === target.dataset.downloadOutgoingWord);
         if (item) await downloadOutgoingWord(item);
       } catch (error) {
         showMessage(`No se pudo descargar el oficio: ${describeError(error)}`, "error");
+      } finally {
+        setButtonLoading(target, false);
       }
       return;
     }
@@ -2084,6 +2416,14 @@ function excelRows() {
       correo: person.email || "",
       whatsapp: person.phone || "",
     })),
+    Agenda: state.agenda.map((item) => ({
+      id: item.id,
+      titulo: item.title,
+      fecha: item.date,
+      hora: item.time || "",
+      participantes: getAgendaParticipants(item).join("; "),
+      notas: item.notes || "",
+    })),
     Configuracion: [{
       id: "main",
       siguiente_numero: state.settings.nextNumber,
@@ -2148,6 +2488,15 @@ function importedFromWorkbook(workbook, XLSX) {
     email: row.correo || "",
     phone: row.whatsapp || "",
   })).filter((person) => person.name);
+  const agenda = sheet("Agenda").map((row) => normalizeAgendaItem({
+    id: row.id || uid(),
+    title: row.titulo || "",
+    date: row.fecha || today(),
+    time: row.hora || "",
+    participants: String(row.participantes || "").split(";").map((value) => value.trim()).filter(Boolean),
+    notes: row.notas || "",
+    createdAt: new Date().toISOString(),
+  })).filter((item) => item.title);
   const config = sheet("Configuracion")[0] || {};
   return {
     metadata: {
@@ -2157,6 +2506,7 @@ function importedFromWorkbook(workbook, XLSX) {
     incoming,
     outgoing,
     people,
+    agenda,
     settings: {
       id: "main",
       nextNumber: Number(config.siguiente_numero) || state.settings.nextNumber,
@@ -2187,11 +2537,15 @@ async function parseImportFile(file) {
 
 function bindImportExport() {
   $("#exportBtn").addEventListener("click", async () => {
+    const button = $("#exportBtn");
+    setButtonLoading(button, true, "Exportando...");
     try {
       await exportExcel();
       showMessage("Respaldo de Excel generado.", "success");
     } catch (error) {
       showMessage(`No se pudo exportar Excel: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(button, false);
     }
   });
 
@@ -2203,11 +2557,13 @@ function bindImportExport() {
       const incoming = imported.incoming || [];
       const outgoing = imported.outgoing || [];
       const people = imported.people || [];
+      const agenda = imported.agenda || [];
       const settings = imported.settings || state.settings;
       await Promise.all([
         ...incoming.map((item) => put("incoming", normalizeIncomingItem(item))),
         ...outgoing.map((item) => put("outgoing", item)),
         ...people.map((item) => put("people", item)),
+        ...agenda.map((item) => put("agenda", normalizeAgendaItem(item))),
         put("settings", { id: "main", ...settings }),
       ]);
       event.target.value = "";
@@ -2263,7 +2619,7 @@ function bindLiveRefresh() {
     if (refreshing || isEditing()) return;
     refreshing = true;
     try {
-      await refresh();
+      await loadState();
     } catch (error) {
       console.warn("No se pudo actualizar en vivo:", error);
     } finally {

@@ -97,6 +97,23 @@ nav,
   min-height: 100vh;
 }
 
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 80;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), var(--gold), transparent);
+  opacity: 0;
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+
+.app-shell.is-loading::before {
+  opacity: 1;
+  animation: loadingBar 900ms ease-in-out infinite;
+}
+
 .auth-screen {
   position: relative;
   isolation: isolate;
@@ -141,8 +158,7 @@ nav,
 }
 
 .auth-brand .brand-mark {
-  background: var(--accent);
-  color: white;
+  background: transparent;
 }
 
 .auth-brand span {
@@ -186,13 +202,15 @@ nav,
 
 .brand-mark {
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
   border-radius: 8px;
-  background: #eaf3ef;
+  background: transparent;
   color: var(--accent);
   display: grid;
   place-items: center;
+  object-fit: contain;
+  padding: 4px;
   font-weight: 900;
   letter-spacing: 0;
   box-shadow: inset 0 0 0 1px rgba(36, 91, 78, 0.08);
@@ -418,6 +436,30 @@ h2 {
   box-shadow: 0 8px 18px rgba(36, 91, 78, 0.16);
 }
 
+.button:disabled,
+.icon-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.button.is-loading,
+.icon-button.is-loading {
+  gap: 9px;
+}
+
+.button.is-loading::before,
+.icon-button.is-loading::before {
+  content: "";
+  width: 0.9em;
+  height: 0.9em;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  opacity: 0.78;
+  animation: spin 700ms linear infinite;
+}
+
 .button.soft-primary {
   background: var(--accent-soft);
   border-color: #b7d5c9;
@@ -575,6 +617,58 @@ h2 {
   border-left-color: var(--danger);
 }
 
+.calendar-day-details {
+  display: grid;
+  gap: 10px;
+  max-height: min(56vh, 520px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.calendar-detail-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--user-color, var(--accent));
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.calendar-detail-card.soon {
+  border-left-color: var(--gold);
+}
+
+.calendar-detail-card.urgent,
+.calendar-detail-card.overdue {
+  border-left-color: var(--danger);
+}
+
+.agenda-detail-card {
+  background: color-mix(in srgb, var(--user-color) 8%, white);
+}
+
+.calendar-detail-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.calendar-detail-heading strong {
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.calendar-detail-card p {
+  margin: 0;
+  color: #31403b;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.agenda-item {
+  background: color-mix(in srgb, var(--user-color) 8%, white);
+}
+
 .month-calendar {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -610,6 +704,18 @@ h2 {
   min-height: 118px;
   padding: 8px;
   background: rgba(255, 255, 255, 0.84);
+}
+
+.month-day[data-agenda-date] {
+  cursor: pointer;
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.month-day[data-agenda-date]:hover,
+.month-day[data-agenda-date]:focus-visible {
+  background: #f2faf6;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, white);
+  outline: 0;
 }
 
 .month-day.muted {
@@ -655,6 +761,11 @@ h2 {
 
 .day-activity:hover {
   box-shadow: 0 8px 18px color-mix(in srgb, var(--user-color) 16%, transparent);
+}
+
+.agenda-activity {
+  border-style: solid;
+  background: color-mix(in srgb, var(--user-color) 14%, white);
 }
 
 .day-activity strong,
@@ -1425,6 +1536,22 @@ dialog::backdrop {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes loadingBar {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

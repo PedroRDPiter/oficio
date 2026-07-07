@@ -40,10 +40,20 @@ const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024
 const API_TOKEN = process.env.API_TOKEN || "";
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || `http://localhost:${PORT}`;
-const STORES = ["incoming", "outgoing", "people", "settings"];
+const STORES = ["incoming", "outgoing", "people", "settings", "agenda"];
 const PRIORITIES = new Set(["Normal", "Alta", "Urgente"]);
 const INCOMING_STATUSES = new Set(["Pendiente de asignacion", "En revision", "Asignado", "Respondido"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DEPARTMENT_BY_PREFIX = {
+  DPDU: "Planeacion y Desarrollo Urbano",
+  CFAGU: "Atencion y Gestion Urbana",
+  IP: "Imagen Publica",
+  PP: "Planes y Programas",
+  MR: "Mejora Regulatoria",
+  PYSP: "Proyectos",
+  DU: "Desarrollo Urbano",
+  OP: "Obras Publicas",
+};
 const ALLOWED_DOCUMENT_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -125,6 +135,7 @@ function initialData() {
     incoming: [],
     outgoing: [],
     people: [],
+    agenda: [],
     settings: [{ id: "main", nextNumber: 1, directorEmail: "dir.planeacionydu@gmail.com", adminDeleteKey: "" }],
   };
 }
@@ -305,9 +316,49 @@ function settingsToDb(settings) {
   };
 }
 
+function agendaToApp(row) {
+  return {
+    id: row.id,
+    title: row.titulo,
+    date: dateOnly(row.fecha),
+    time: String(row.hora || "").slice(0, 5),
+    participants: Array.isArray(row.participantes) ? row.participantes : [],
+    notes: row.notas || "",
+    createdAt: dateTime(row.creado_en),
+  };
+}
+
+function agendaToDb(item) {
+  return {
+    id: uuidOrNew(item.id),
+    titulo: item.title,
+    fecha: item.date,
+    hora: item.time || null,
+    participantes: Array.isArray(item.participants) ? item.participants.filter(Boolean) : [],
+    notas: item.notes || null,
+    creado_en: item.createdAt || new Date().toISOString(),
+  };
+}
+
 async function getPeopleRows(client = pgPool) {
   const { rows } = await client.query("select * from personal order by nombre");
   return rows;
+}
+
+async function ensurePostgresSchema() {
+  if (!pgPool) return;
+  await pgPool.query("create extension if not exists pgcrypto");
+  await pgPool.query(`
+    create table if not exists agenda_registros (
+      id uuid primary key default gen_random_uuid(),
+      titulo text not null,
+      fecha date not null,
+      hora time,
+      participantes text[] not null default '{}',
+      notas text,
+      creado_en timestamptz not null default now()
+    )
+  `);
 }
 
 async function readPostgresStore(store) {
@@ -328,6 +379,10 @@ async function readPostgresStore(store) {
     const people = await getPeopleRows();
     const { rows } = await pgPool.query("select * from oficios_generados order by numero desc");
     return rows.map((row) => outgoingToApp(row, people));
+  }
+  if (store === "agenda") {
+    const { rows } = await pgPool.query("select * from agenda_registros order by fecha asc, hora asc nulls last, creado_en desc");
+    return rows.map(agendaToApp);
   }
   return [];
 }
@@ -469,6 +524,31 @@ async function putPostgresStore(store, value) {
     return outgoingToApp(rows[0], people);
   }
 
+  if (store === "agenda") {
+    const payload = agendaToDb(value);
+    const { rows } = await pgPool.query(
+      `insert into agenda_registros (id, titulo, fecha, hora, participantes, notas, creado_en)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       on conflict (id) do update set
+         titulo = excluded.titulo,
+         fecha = excluded.fecha,
+         hora = excluded.hora,
+         participantes = excluded.participantes,
+         notas = excluded.notas
+       returning *`,
+      [
+        payload.id,
+        payload.titulo,
+        payload.fecha,
+        payload.hora,
+        payload.participantes,
+        payload.notas,
+        payload.creado_en,
+      ],
+    );
+    return agendaToApp(rows[0]);
+  }
+
   throw new Error("Almacen no soportado");
 }
 
@@ -478,6 +558,7 @@ async function deletePostgresStore(store, id) {
     incoming: "oficios_recibidos",
     outgoing: "oficios_generados",
     settings: "configuracion",
+    agenda: "agenda_registros",
   };
   await pgPool.query(`delete from ${tables[store]} where id = $1`, [id]);
 }
@@ -654,11 +735,29 @@ function docxHeaderParagraph(text) {
   return `<w:p><w:pPr><w:pStyle w:val="Encabezado"/><w:rPr><w:rFonts w:ascii="Galatea" w:hAnsi="Galatea"/><w:noProof/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Galatea" w:hAnsi="Galatea"/><w:noProof/><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr><w:t>${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
+function docxTableParagraph(text) {
+  return `<w:p><w:pPr><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="16"/><w:szCs w:val="16"/></w:rPr><w:t>${escapeXml(text)}</w:t></w:r></w:p>`;
+}
+
 function formatTemplateNumber(item) {
   if (item.fullNumber) return String(item.fullNumber);
   const year = new Date(`${item.createdAt || new Date().toISOString().slice(0, 10)}T00:00:00`).getFullYear();
   if (item.prefix && item.number) return `${item.prefix}-${String(item.number).padStart(3, "0")}/${year}`;
   return "";
+}
+
+function formatLongSpanishDate(value) {
+  const date = new Date(`${value || new Date().toISOString().slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return String(value || "");
+  return new Intl.DateTimeFormat("es-MX", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
+
+function departmentForPrefix(prefix) {
+  return DEPARTMENT_BY_PREFIX[String(prefix || "DPDU").toUpperCase()] || String(prefix || "DPDU").toUpperCase();
 }
 
 function replaceHeaderValue(xml, label, value) {
@@ -670,10 +769,63 @@ function replaceHeaderValue(xml, label, value) {
   });
 }
 
-function outgoingWordDocumentXml(templateXml, item) {
+function docxVisibleText(xml) {
+  return [...xml.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)]
+    .map((match) => match[1])
+    .join(" ");
+}
+
+function replaceCellText(cellXml, value) {
+  const tcPr = cellXml.match(/<w:tcPr[\s\S]*?<\/w:tcPr>/)?.[0] || "";
+  return `<w:tc>${tcPr}${docxTableParagraph(value)}</w:tc>`;
+}
+
+function replaceReviewTable(xml, elaboratedBy, reviewedBy) {
+  return xml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, (tableXml) => {
+    const tableText = normalizeText(docxVisibleText(tableXml));
+    if (!tableText.includes("elaborado") || !tableText.includes("revisado")) return tableXml;
+
+    const rows = tableXml.match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [];
+    const headerIndex = rows.findIndex((row) => {
+      const rowText = normalizeText(docxVisibleText(row));
+      return rowText.includes("elaborado") && rowText.includes("revisado");
+    });
+    const valueRow = rows[headerIndex + 1];
+    if (headerIndex < 0 || !valueRow) return tableXml;
+
+    const cells = valueRow.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) || [];
+    if (cells.length < 2) return tableXml;
+
+    let newRow = valueRow.replace(cells[0], replaceCellText(cells[0], elaboratedBy));
+    newRow = newRow.replace(cells[1], replaceCellText(cells[1], reviewedBy));
+    return tableXml.replace(valueRow, newRow);
+  });
+}
+
+function personName(person) {
+  return person?.name || person?.nombre || "";
+}
+
+function personRole(person) {
+  return person?.role || person?.cargo || "";
+}
+
+function authorNameForItem(item, people = []) {
+  if (item.author) return item.author;
+  const author = people.find((person) => person.id === item.authorId || person.id === item.elaboro);
+  return personName(author);
+}
+
+function reviewerName(people = []) {
+  const reviewer = people.find((person) => normalizeText(personRole(person)).includes("jefe"));
+  return personName(reviewer);
+}
+
+function outgoingWordDocumentXml(templateXml, item, people = []) {
   const createdAt = item.createdAt || new Date().toISOString().slice(0, 10);
+  const elaboratedBy = authorNameForItem(item, people);
   const body = [
-    docxParagraph(`Rincon de Romos, Ags., a ${createdAt}`, { align: "right" }),
+    docxParagraph(`Rincon de Romos, Ags., a ${formatLongSpanishDate(createdAt)}`, { align: "right" }),
     docxParagraph(""),
     docxParagraph(String(item.recipient || "").toUpperCase(), { bold: true }),
     docxParagraph("PRESENTE", { bold: true }),
@@ -686,28 +838,31 @@ function outgoingWordDocumentXml(templateXml, item) {
     docxParagraph("ATENTAMENTE", { align: "center", bold: true }),
     docxParagraph(""),
     docxParagraph(""),
-    docxParagraph(item.author || "", { align: "center", bold: true }),
+    docxParagraph(elaboratedBy, { align: "center", bold: true }),
   ].join("");
-  return templateXml.replace(/(<w:sectPr[\s\S]*?<\/w:sectPr>)/, `${body}$1`);
+  const withReviewTable = replaceReviewTable(templateXml, elaboratedBy, reviewerName(people));
+  return withReviewTable.replace(/(<w:sectPr[\s\S]*?<\/w:sectPr>)/, `${body}$1`);
 }
 
-function generateOutgoingDocx(item) {
+function generateOutgoingDocx(item, people = []) {
   const templateFile = WORD_TEMPLATE_FILES.find((file) => fs.existsSync(file));
   if (!templateFile) {
     throw new Error("No se encontro la plantilla OficioMembretado.docx");
   }
   const entries = parseZip(fs.readFileSync(templateFile));
   const number = formatTemplateNumber(item);
+  const department = departmentForPrefix(item.prefix);
 
   entries.forEach((entry) => {
-    if (entry.name === "word/header1.xml") {
+    if (/^word\/header\d+\.xml$/.test(entry.name)) {
       let xml = entry.data.toString("utf8");
+      xml = replaceHeaderValue(xml, "Departamento:", department);
       xml = replaceHeaderValue(xml, "No. de Oficio:", number);
       xml = replaceHeaderValue(xml, "Asunto:", item.subject || "");
       entry.data = Buffer.from(xml, "utf8");
     }
     if (entry.name === "word/document.xml") {
-      entry.data = Buffer.from(outgoingWordDocumentXml(entry.data.toString("utf8"), item), "utf8");
+      entry.data = Buffer.from(outgoingWordDocumentXml(entry.data.toString("utf8"), item, people), "utf8");
     }
   });
 
@@ -896,6 +1051,21 @@ function normalizeIncomingRecord(record) {
   };
 }
 
+function normalizeAgendaRecord(record) {
+  const participants = Array.isArray(record.participants)
+    ? record.participants.map((value) => String(value || "").trim()).filter(Boolean)
+    : String(record.participants || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+  return {
+    ...record,
+    title: requiredText(record.title, "title"),
+    date: requiredDate(record.date, "date"),
+    time: record.time ? requiredText(record.time, "time") : "",
+    participants,
+    notes: String(record.notes || "").trim(),
+    createdAt: record.createdAt || new Date().toISOString(),
+  };
+}
+
 function normalizePersonRecord(record) {
   return {
     ...record,
@@ -921,6 +1091,7 @@ function normalizeStoreRecord(store, record) {
   if (store === "outgoing") return normalizeOutgoingRecord(record);
   if (store === "people") return normalizePersonRecord(record);
   if (store === "settings") return normalizeSettingsRecord(record);
+  if (store === "agenda") return normalizeAgendaRecord(record);
   return record;
 }
 
@@ -929,6 +1100,7 @@ function auditSummary(store, record = {}) {
   if (store === "outgoing") return { fullNumber: record.fullNumber, recipient: record.recipient, prefix: record.prefix };
   if (store === "people") return { name: record.name, role: record.role };
   if (store === "settings") return { id: record.id || "main" };
+  if (store === "agenda") return { title: record.title, date: record.date, time: record.time };
   return {};
 }
 
@@ -1030,7 +1202,9 @@ async function handleApi(req, res) {
       send(res, 404, JSON.stringify({ error: "No se encontro la plantilla OficioMembretado.docx" }));
       return;
     }
-    const outgoing = pgPool ? await readPostgresStore("outgoing") : readData().outgoing;
+    const data = pgPool ? null : readData();
+    const outgoing = pgPool ? await readPostgresStore("outgoing") : data.outgoing;
+    const people = pgPool ? (await getPeopleRows()).map(personToApp) : data.people;
     const item = outgoing.find((row) => row.id === decodeURIComponent(parts[2]));
     if (!item) {
       send(res, 404, JSON.stringify({ error: "Oficio no encontrado" }));
@@ -1044,7 +1218,7 @@ async function handleApi(req, res) {
       "X-Content-Type-Options": "nosniff",
       "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     });
-    res.end(generateOutgoingDocx(item));
+    res.end(generateOutgoingDocx(item, people));
     return;
   }
 
@@ -1181,16 +1355,24 @@ const server = http.createServer((req, res) => {
   serveStatic(req, res);
 });
 
-server.listen(PORT, HOST, () => {
-  const lanAddresses = Object.values(os.networkInterfaces())
-    .flat()
-    .filter((item) => item && item.family === "IPv4" && !item.internal)
-    .map((item) => `http://${item.address}:${PORT}/`);
-  console.log(`Control de Oficios listo en http://localhost:${PORT}/`);
-  if (lanAddresses.length) {
-    console.log("En otros equipos de la red:");
-    lanAddresses.forEach((address) => console.log(`  ${address}`));
-  } else {
-    console.log("No se detecto una IP de red local. Revisa la conexion de red.");
-  }
+async function startServer() {
+  await ensurePostgresSchema();
+  server.listen(PORT, HOST, () => {
+    const lanAddresses = Object.values(os.networkInterfaces())
+      .flat()
+      .filter((item) => item && item.family === "IPv4" && !item.internal)
+      .map((item) => `http://${item.address}:${PORT}/`);
+    console.log(`Control de Oficios listo en http://localhost:${PORT}/`);
+    if (lanAddresses.length) {
+      console.log("En otros equipos de la red:");
+      lanAddresses.forEach((address) => console.log(`  ${address}`));
+    } else {
+      console.log("No se detecto una IP de red local. Revisa la conexion de red.");
+    }
+  });
+}
+
+startServer().catch((error) => {
+  console.error("No se pudo iniciar Control de Oficios:", error);
+  process.exitCode = 1;
 });

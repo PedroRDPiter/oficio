@@ -1376,6 +1376,9 @@ function renderCalendarDayDetails(dateValue) {
           <span class="meta-chip">Participan: ${escapeHtml(getAgendaParticipants(item).join(", ") || "Sin participantes")}</span>
         </div>
         ${item.notes ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(item.notes)}</p>` : ""}
+        <div class="actions">
+          <button class="link-button" type="button" data-delete-agenda="${escapeHtml(item.id)}">Eliminar</button>
+        </div>
       </article>
     `).join("")}
   `;
@@ -2343,6 +2346,24 @@ function bindLists() {
       try {
         await remove("people", target.dataset.deletePerson);
         await refresh();
+      } catch (error) {
+        showMessage(`No se pudo borrar: ${describeError(error)}`, "error");
+      } finally {
+        state.pendingDeleteKey = "";
+      }
+      return;
+    }
+
+    if (target.dataset.deleteAgenda) {
+      const deleteKey = confirmAdminDelete();
+      if (!deleteKey) return;
+      state.pendingDeleteKey = deleteKey;
+      try {
+        const dateValue = state.agenda.find((item) => item.id === target.dataset.deleteAgenda)?.date;
+        await remove("agenda", target.dataset.deleteAgenda);
+        await refresh();
+        if (dateValue && $("#calendarDayDialog")?.open) renderCalendarDayDetails(dateValue);
+        showMessage("Registro de agenda borrado correctamente.", "success");
       } catch (error) {
         showMessage(`No se pudo borrar: ${describeError(error)}`, "error");
       } finally {

@@ -311,12 +311,13 @@
                 <span class="subtle-text">Da clic en un dia para ver detalles o agregar actividad</span>
               </div>
               <div class="calendar-controls">
-                <button class="button ghost" type="button" id="calendarPrev">Anterior</button>
+                <button class="button ghost" type="button" id="calendarPrev" aria-label="Mes anterior">&lsaquo;</button>
                 <strong id="calendarTitle">Mes</strong>
-                <button class="button ghost" type="button" id="calendarNext">Siguiente</button>
+                <button class="button ghost" type="button" id="calendarNext" aria-label="Mes siguiente">&rsaquo;</button>
                 <button class="button soft-primary" type="button" id="calendarToday">Hoy</button>
               </div>
             </div>
+            <div class="calendar-summary" id="calendarSummary" aria-live="polite"></div>
             <div class="calendar-legend" id="calendarLegend"></div>
             <div class="month-calendar" id="monthCalendar" aria-live="polite"></div>
           </section>
@@ -366,7 +367,7 @@
                 </div>
                 <label>
                   Clave para borrar registros
-                  <input name="adminDeleteKey" type="password" autocomplete="new-password" placeholder="Define una clave para confirmar borrados">
+                  <input name="adminDeleteKey" type="password" autocomplete="new-password" value="dir.plan" disabled>
                 </label>
                 <div class="form-actions">
                   <button class="button primary" type="submit">Guardar configuracion</button>

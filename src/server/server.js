@@ -129,6 +129,7 @@ function postgresConfig() {
 
 const pgConfig = postgresConfig();
 const pgPool = pgConfig ? new Pool(pgConfig) : null;
+const ADMIN_DELETE_KEY = "dir.plan";
 
 function initialData() {
   return {
@@ -136,7 +137,7 @@ function initialData() {
     outgoing: [],
     people: [],
     agenda: [],
-    settings: [{ id: "main", nextNumber: 1, directorEmail: "dir.planeacionydu@gmail.com", adminDeleteKey: "" }],
+    settings: [{ id: "main", nextNumber: 1, directorEmail: "dir.planeacionydu@gmail.com", adminDeleteKey: ADMIN_DELETE_KEY }],
   };
 }
 
@@ -296,7 +297,7 @@ function settingsToApp(row) {
     nextNumber: row.siguiente_numero,
     directorEmail: row.correo_director,
     directorPhone: row.telefono_director || "",
-    adminDeleteKey: "",
+    adminDeleteKey: ADMIN_DELETE_KEY,
     notifyEmail: row.notificar_correo ?? true,
     notifyWhatsapp: row.notificar_whatsapp ?? false,
     notifySystem: row.notificar_sistema ?? true,
@@ -309,7 +310,7 @@ function settingsToDb(settings) {
     siguiente_numero: Number(settings.nextNumber) || 1,
     correo_director: settings.directorEmail || "dir.planeacionydu@gmail.com",
     telefono_director: settings.directorPhone || null,
-    clave_borrado: settings.adminDeleteKey || null,
+    clave_borrado: ADMIN_DELETE_KEY,
     notificar_correo: Boolean(settings.notifyEmail),
     notificar_whatsapp: Boolean(settings.notifyWhatsapp),
     notificar_sistema: Boolean(settings.notifySystem),
@@ -989,12 +990,7 @@ function secureCompare(value, expected) {
 }
 
 async function configuredDeleteKey() {
-  if (process.env.DELETE_PASSWORD) return process.env.DELETE_PASSWORD;
-  if (pgPool) {
-    const { rows } = await pgPool.query("select clave_borrado from configuracion where id = $1", ["main"]);
-    return rows[0]?.clave_borrado || "";
-  }
-  return readData().settings?.find((item) => item.id === "main")?.adminDeleteKey || "";
+  return ADMIN_DELETE_KEY;
 }
 
 async function assertDeleteAuthorized(req) {
@@ -1263,9 +1259,8 @@ async function handleApi(req, res) {
       return;
     }
     const data = readData();
-    if (store === "settings" && !record.adminDeleteKey) {
-      const currentSettings = data.settings.find((item) => item.id === id);
-      record.adminDeleteKey = currentSettings?.adminDeleteKey || "";
+    if (store === "settings") {
+      record.adminDeleteKey = ADMIN_DELETE_KEY;
     }
     const index = data[store].findIndex((item) => item.id === id);
     if (index >= 0) data[store][index] = record;

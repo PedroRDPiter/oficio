@@ -504,6 +504,7 @@ h2 {
 
 .calendar-toolbar {
   align-items: center;
+  gap: 14px;
 }
 
 .subtle-text {
@@ -522,10 +523,52 @@ h2 {
   justify-content: flex-end;
 }
 
+.calendar-controls .button {
+  min-width: 44px;
+  min-height: 40px;
+  padding-inline: 12px;
+}
+
 .calendar-controls strong {
-  min-width: 150px;
+  min-width: 174px;
   text-align: center;
   text-transform: capitalize;
+  font-size: 1.02rem;
+}
+
+.calendar-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.calendar-summary span {
+  display: grid;
+  gap: 3px;
+  min-height: 62px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 249, 0.76));
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 780;
+}
+
+.calendar-summary strong {
+  color: var(--ink);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.calendar-summary .is-urgent {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, white);
+}
+
+.calendar-summary .is-urgent strong {
+  color: var(--danger);
 }
 
 .calendar-legend {
@@ -694,13 +737,16 @@ h2 {
   min-height: 34px;
   display: grid;
   place-items: center;
-  background: var(--accent-soft);
+  background: #eef5f1;
   color: var(--accent-strong);
   font-size: 0.78rem;
   font-weight: 900;
 }
 
 .month-day {
+  display: grid;
+  align-content: start;
+  gap: 6px;
   min-height: 118px;
   padding: 8px;
   background: rgba(255, 255, 255, 0.84);
@@ -713,9 +759,13 @@ h2 {
 
 .month-day[data-agenda-date]:hover,
 .month-day[data-agenda-date]:focus-visible {
-  background: #f2faf6;
+  background: #f5fbf8;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, white);
   outline: 0;
+}
+
+.month-day.has-activities {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 251, 249, 0.9));
 }
 
 .month-day.muted {
@@ -724,6 +774,13 @@ h2 {
 
 .month-day.today {
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .day-number {
@@ -742,10 +799,21 @@ h2 {
   color: white;
 }
 
+.day-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 22px;
+  border-radius: 999px;
+  background: #edf3f0;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
 .day-activities {
   display: grid;
   gap: 5px;
-  margin-top: 6px;
 }
 
 .day-activity {
@@ -757,6 +825,18 @@ h2 {
   padding: 6px 7px;
   min-height: 42px;
   overflow: hidden;
+}
+
+.activity-type {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--user-color);
+  padding: 2px 6px;
+  font-size: 0.66rem;
+  font-weight: 900;
+  line-height: 1.1;
 }
 
 .day-activity:hover {
@@ -789,9 +869,27 @@ h2 {
   font-size: 0.78rem;
 }
 
-.day-activity span {
+.day-activity span:not(.activity-type) {
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.day-activity .activity-type {
+  color: var(--user-color);
+  font-size: 0.66rem;
+}
+
+.more-activities {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 24px;
+  border-radius: 999px;
+  background: #edf3f0;
+  color: var(--accent-strong);
+  padding: 0 8px;
+  font-size: 0.72rem;
+  font-weight: 900;
 }
 
 .stat-card,
@@ -1759,7 +1857,7 @@ dialog::backdrop {
 
   .calendar-controls {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 44px 1fr 44px;
     width: 100%;
   }
 
@@ -1767,6 +1865,29 @@ dialog::backdrop {
     grid-column: 1 / -1;
     grid-row: 1;
     min-width: 0;
+  }
+
+  .calendar-controls .button {
+    min-width: 0;
+  }
+
+  .calendar-controls #calendarPrev {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .calendar-controls #calendarNext {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .calendar-controls #calendarToday {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .calendar-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .month-calendar {
@@ -1781,7 +1902,7 @@ dialog::backdrop {
 
   .month-day {
     display: grid;
-    grid-template-columns: 42px 1fr;
+    grid-template-columns: 52px 1fr;
     gap: 8px;
     min-height: 58px;
     margin-bottom: 8px;
@@ -1789,7 +1910,17 @@ dialog::backdrop {
     border-radius: 8px;
   }
 
-  .month-day.muted:empty {
+  .day-head {
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-direction: column;
+  }
+
+  .day-activities {
+    margin-top: 0;
+  }
+
+  .month-day.out-month {
     display: none;
   }
 

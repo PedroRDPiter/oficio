@@ -18,6 +18,7 @@ const XLSX_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
 const LOCAL_API_TOKEN_KEY = "oficios-local-api-token";
 const LOCAL_NOTIFICATION_SETTINGS_KEY = "oficios-notification-settings";
 const REMINDER_STATE_KEY = "oficios-reminders-shown";
+const ADMIN_DELETE_KEY = "dir.plan";
 const PREFIX_OPTIONS = [
   { value: "DPDU", label: "DPDU", color: "#00a878" },
   { value: "CFAGU", label: "CFAGU", color: "#1e88ff" },
@@ -40,7 +41,7 @@ const DEFAULT_SETTINGS = {
   nextNumber: 1,
   directorEmail: "dir.planeacionydu@gmail.com",
   directorPhone: "",
-  adminDeleteKey: "",
+  adminDeleteKey: ADMIN_DELETE_KEY,
   notifyEmail: true,
   notifyWhatsapp: false,
   notifySystem: true,
@@ -467,7 +468,7 @@ function settingsToApp(row) {
     nextNumber: row.siguiente_numero,
     directorEmail: row.correo_director,
     directorPhone: row.telefono_director || "",
-    adminDeleteKey: row.clave_borrado || "",
+    adminDeleteKey: ADMIN_DELETE_KEY,
     notifyEmail: row.notificar_correo ?? true,
     notifyWhatsapp: row.notificar_whatsapp ?? false,
     notifySystem: row.notificar_sistema ?? true,
@@ -480,7 +481,7 @@ function settingsToDb(settings) {
     siguiente_numero: settings.nextNumber,
     correo_director: settings.directorEmail,
     telefono_director: settings.directorPhone || null,
-    clave_borrado: settings.adminDeleteKey || null,
+    clave_borrado: ADMIN_DELETE_KEY,
     notificar_correo: Boolean(settings.notifyEmail),
     notificar_whatsapp: Boolean(settings.notifyWhatsapp),
     notificar_sistema: Boolean(settings.notifySystem),
@@ -1002,6 +1003,7 @@ async function loadState() {
     ...DEFAULT_SETTINGS,
     ...(settingsRows.find((row) => row.id === "main") || state.settings),
     ...loadLocalNotificationSettings(),
+    adminDeleteKey: ADMIN_DELETE_KEY,
   };
   if (!state.people.length) {
     await seedPeople();
@@ -1248,9 +1250,28 @@ function renderCalendar() {
   const monthEnd = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 0);
   const startOffset = month.getDay();
   const totalCells = Math.ceil((startOffset + monthEnd.getDate()) / 7) * 7;
+  const monthStart = month.toISOString().slice(0, 10);
+  const monthFinish = monthEnd.toISOString().slice(0, 10);
+  const monthPending = pending.filter((item) => item.dueAt >= monthStart && item.dueAt <= monthFinish);
+  const monthAgenda = agendaRows.filter((item) => item.date >= monthStart && item.date <= monthFinish);
+  const monthUrgent = monthPending.filter((item) => [" urgent", " overdue"].includes(dueClass(item))).length;
+  const activeDays = new Set([
+    ...monthPending.map((item) => item.dueAt),
+    ...monthAgenda.map((item) => item.date),
+  ]).size;
   const title = $("#calendarTitle");
   if (title) {
     title.textContent = month.toLocaleDateString("es-MX", { month: "long", year: "numeric" });
+  }
+
+  const summary = $("#calendarSummary");
+  if (summary) {
+    summary.innerHTML = `
+      <span><strong>${monthPending.length}</strong> asignacion${monthPending.length === 1 ? "" : "es"}</span>
+      <span><strong>${monthAgenda.length}</strong> registro${monthAgenda.length === 1 ? "" : "s"} de agenda</span>
+      <span><strong>${activeDays}</strong> dia${activeDays === 1 ? "" : "s"} con actividad</span>
+      <span class="${monthUrgent ? "is-urgent" : ""}"><strong>${monthUrgent}</strong> urgente${monthUrgent === 1 ? "" : "s"}</span>
+    `;
   }
 
   const legend = $("#calendarLegend");
@@ -1274,25 +1295,48 @@ function renderCalendar() {
     const isoDate = inMonth ? cellDate.toISOString().slice(0, 10) : "";
     const items = inMonth ? pending.filter((item) => item.dueAt === isoDate) : [];
     const agendaItems = inMonth ? agendaRows.filter((item) => item.date === isoDate) : [];
+    const activities = [
+      ...items.map((item) => ({
+        type: "assignment",
+        className: dueClass(item),
+        color: itemAssigneeColor(item),
+        label: "Asignacion",
+        title: item.folio,
+        detail: getAssigneeNames(item).join(", ") || "Sin asignar",
+        note: assignmentNote(item),
+        tooltip: `${item.folio}\nAsignado a: ${getAssigneeNames(item).join(", ") || "Sin asignar"}${assignmentNote(item) ? `\nNotas: ${assignmentNote(item)}` : ""}\n${item.subject}`,
+      })),
+      ...agendaItems.map((item) => ({
+        type: "agenda",
+        className: " agenda-activity",
+        color: agendaColor(item),
+        label: item.time || "Agenda",
+        title: item.title,
+        detail: getAgendaParticipants(item).join(", ") || "Sin participantes",
+        note: item.notes,
+        tooltip: `${item.title}\nParticipan: ${getAgendaParticipants(item).join(", ") || "Sin participantes"}${item.notes ? `\nNotas: ${item.notes}` : ""}`,
+      })),
+    ];
+    const visibleActivities = activities.slice(0, 3);
+    const hiddenCount = activities.length - visibleActivities.length;
+    const activityLabel = activities.length === 1 ? "actividad" : "actividades";
     const isToday = isoDate === today();
     return `
-      <div class="month-day${inMonth ? "" : " muted"}${isToday ? " today" : ""}" ${inMonth ? `data-agenda-date="${escapeHtml(isoDate)}" role="button" tabindex="0" aria-label="Ver actividades de ${escapeHtml(isoDate)}"` : ""}>
-        <span class="day-number">${inMonth ? dayNumber : ""}</span>
+      <div class="month-day${inMonth ? "" : " muted out-month"}${isToday ? " today" : ""}${activities.length ? " has-activities" : ""}" ${inMonth ? `data-agenda-date="${escapeHtml(isoDate)}" role="button" tabindex="0" aria-label="Ver ${activities.length} ${activityLabel} de ${escapeHtml(isoDate)}"` : ""}>
+        <div class="day-head">
+          <span class="day-number">${inMonth ? dayNumber : ""}</span>
+          ${activities.length ? `<span class="day-count">${activities.length}</span>` : ""}
+        </div>
         <div class="day-activities">
-          ${items.map((item) => `
-            <article class="day-activity${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}" title="${escapeHtml(`${item.folio}\nAsignado a: ${getAssigneeNames(item).join(", ") || "Sin asignar"}${assignmentNote(item) ? `\nNotas: ${assignmentNote(item)}` : ""}\n${item.subject}`)}">
-              <strong>${escapeHtml(item.folio)}</strong>
-              <span>Asignado a: ${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
-              ${assignmentNote(item) ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(assignmentNote(item))}</p>` : ""}
+          ${visibleActivities.map((activity) => `
+            <article class="day-activity${activity.className}" style="--user-color: ${activity.color}" title="${escapeHtml(activity.tooltip)}">
+              <span class="activity-type">${escapeHtml(activity.label)}</span>
+              <strong>${escapeHtml(activity.title)}</strong>
+              <span>${escapeHtml(activity.detail)}</span>
+              ${activity.note ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(activity.note)}</p>` : ""}
             </article>
           `).join("")}
-          ${agendaItems.map((item) => `
-            <article class="day-activity agenda-activity" style="--user-color: ${agendaColor(item)}" title="${escapeHtml(`${item.title}\nParticipan: ${getAgendaParticipants(item).join(", ") || "Sin participantes"}${item.notes ? `\nNotas: ${item.notes}` : ""}`)}">
-              <strong>${escapeHtml(item.time || "Agenda")} - ${escapeHtml(item.title)}</strong>
-              <span>${escapeHtml(getAgendaParticipants(item).join(", ") || "Sin participantes")}</span>
-              ${item.notes ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(item.notes)}</p>` : ""}
-            </article>
-          `).join("")}
+          ${hiddenCount > 0 ? `<span class="more-activities">+${hiddenCount} mas</span>` : ""}
         </div>
       </div>
     `;
@@ -1521,7 +1565,7 @@ function googleCalendarForAssignment(item, people = []) {
   return googleCalendarUrl({
     title: `Responder oficio ${item.folio}`,
     date,
-    details: buildAssignmentMessage(item),
+    details: buildAssignmentMessage(item, people),
     guests: people.map((person) => person.email),
   });
 }
@@ -1660,9 +1704,10 @@ function peopleForAssignees(item) {
   return state.people.filter((person) => names.has(person.name));
 }
 
-function buildAssignmentMessage(item) {
+function buildAssignmentMessage(item, assignedPeople = peopleForAssignees(item)) {
   return [
-    "Se te asigno un oficio para seguimiento.",
+    "Se le asigno el siguiente oficio para seguimiento:",
+    assignedPeople.map((person) => person.name).filter(Boolean).join(", "),
     `Folio: ${item.folio}`,
     `Remitente: ${item.sender}`,
     `Asunto: ${item.subject}`,
@@ -1676,7 +1721,7 @@ function gmailAssignment(item, people) {
   if (!emails.length) return "";
   const calendarHref = googleCalendarForAssignment(item, people);
   const body = [
-    buildAssignmentMessage(item),
+    buildAssignmentMessage(item, people),
     "",
     calendarHref ? `Agendar en Google Calendar: ${calendarHref}` : "",
   ].filter(Boolean).join("\n");
@@ -1684,7 +1729,7 @@ function gmailAssignment(item, people) {
 }
 
 function whatsappAssignmentLinks(item, people) {
-  const text = encodeURIComponent(buildAssignmentMessage(item));
+  const text = encodeURIComponent(buildAssignmentMessage(item, people));
   return people
     .map((person) => whatsappPhone(person.phone))
     .filter(Boolean)
@@ -1779,6 +1824,7 @@ function bindReminders() {
 }
 
 async function saveSettings() {
+  state.settings.adminDeleteKey = ADMIN_DELETE_KEY;
   saveLocalNotificationSettings(state.settings);
   await put("settings", { id: "main", ...state.settings });
 }
@@ -2130,7 +2176,7 @@ function bindForms() {
       const form = event.currentTarget;
       state.settings.directorEmail = form.elements.directorEmail.value.trim();
       state.settings.directorPhone = normalizePhone(form.elements.directorPhone.value);
-      state.settings.adminDeleteKey = form.elements.adminDeleteKey.value.trim();
+      state.settings.adminDeleteKey = ADMIN_DELETE_KEY;
       state.settings.notifyEmail = form.elements.notifyEmail.checked;
       state.settings.notifyWhatsapp = form.elements.notifyWhatsapp.checked;
       state.settings.notifySystem = form.elements.notifySystem.checked;
@@ -2453,7 +2499,7 @@ function excelRows() {
       notificar_correo: state.settings.notifyEmail,
       notificar_whatsapp: state.settings.notifyWhatsapp,
       notificar_sistema: state.settings.notifySystem,
-      clave_borrado: state.settings.adminDeleteKey || "",
+      clave_borrado: ADMIN_DELETE_KEY,
     }],
   };
 }
@@ -2536,7 +2582,7 @@ function importedFromWorkbook(workbook, XLSX) {
       notifyEmail: config.notificar_correo ?? state.settings.notifyEmail,
       notifyWhatsapp: config.notificar_whatsapp ?? state.settings.notifyWhatsapp,
       notifySystem: config.notificar_sistema ?? state.settings.notifySystem,
-      adminDeleteKey: config.clave_borrado || state.settings.adminDeleteKey || "",
+      adminDeleteKey: ADMIN_DELETE_KEY,
     },
   };
 }
@@ -2579,7 +2625,7 @@ function bindImportExport() {
       const outgoing = imported.outgoing || [];
       const people = imported.people || [];
       const agenda = imported.agenda || [];
-      const settings = imported.settings || state.settings;
+      const settings = { ...(imported.settings || state.settings), adminDeleteKey: ADMIN_DELETE_KEY };
       await Promise.all([
         ...incoming.map((item) => put("incoming", normalizeIncomingItem(item))),
         ...outgoing.map((item) => put("outgoing", item)),

@@ -99,6 +99,37 @@ Comando de verificacion:
 npm run check
 ```
 
+## Acceso Fuera De La Red Local Por Mas De 48 Horas
+
+Para que el sistema se pueda abrir desde equipos fuera de la red local y dure mas de 48 horas, usa un despliegue permanente en la nube. No uses enlaces temporales de ngrok, LocalTunnel o tuneles rapidos para operacion diaria, porque pueden cambiar, vencer o caerse cuando se cierre la sesion.
+
+La opcion mas directa para este proyecto es Render con disco persistente:
+
+1. Sube este repositorio a GitHub.
+2. En Render crea un servicio desde `render.yaml` usando la opcion **Blueprint**.
+3. Verifica que el servicio tenga disco persistente montado en `/var/data`.
+4. Configura estas variables:
+
+```txt
+HOST=0.0.0.0
+DATA_FILE=/var/data/oficios-data.json
+DOCUMENTS_DIR=/var/data/documentos
+MAX_UPLOAD_BYTES=26214400
+PUBLIC_BASE_URL=https://TU-SERVICIO.onrender.com
+ALLOWED_ORIGIN=https://TU-SERVICIO.onrender.com
+API_TOKEN=UN_TOKEN_LARGO_Y_PRIVADO
+```
+
+5. Despliega el servicio y abre:
+
+```txt
+https://TU-SERVICIO.onrender.com/
+```
+
+6. En la app, cuando pida token de API local, usa el mismo valor configurado en `API_TOKEN`.
+
+Si se usara Netlify + Supabase, la app tambien puede durar mas de 48 horas, pero requiere configurar Supabase Auth, tablas, roles y storage. Esa ruta es mejor cuando se necesitan usuarios con permisos por rol.
+
 ## Render con disco persistente
 
 El archivo `render.yaml` deja preparado un servicio web con disco persistente en `/var/data`.

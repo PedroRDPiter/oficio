@@ -42,7 +42,7 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || `http://localhost:${PORT}`;
 const STORES = ["incoming", "outgoing", "people", "settings", "agenda"];
 const PRIORITIES = new Set(["Normal", "Alta", "Urgente"]);
-const INCOMING_STATUSES = new Set(["Pendiente de asignacion", "En revision", "Asignado", "Respondido"]);
+const INCOMING_STATUSES = new Set(["Pendiente de asignacion", "En revision", "Asignado", "Respondido", "Completado"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEPARTMENT_BY_PREFIX = {
   DPDU: "Planeacion y Desarrollo Urbano",
@@ -729,7 +729,8 @@ function docxParagraph(text, options = {}) {
   const spacing = options.spacingAfter === 0 ? '<w:spacing w:after="0"/>' : "";
   const bold = options.bold ? "<w:b/>" : "";
   const size = options.size || 22;
-  return `<w:p><w:pPr>${align}${spacing}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${bold}</w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+  const value = options.textTransform === "uppercase" ? String(text || "").toLocaleUpperCase("es-MX") : text;
+  return `<w:p><w:pPr>${align}${spacing}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${bold}</w:rPr><w:t xml:space="preserve">${escapeXml(value)}</w:t></w:r></w:p>`;
 }
 
 function docxHeaderParagraph(text) {
@@ -817,6 +818,13 @@ function authorNameForItem(item, people = []) {
   return personName(author);
 }
 
+function licensedUrbanistName(name) {
+  const value = String(name || "").trim();
+  if (!value) return "";
+  if (/^lic\.\s*urb\./i.test(value)) return value;
+  return `Lic. ${value.replace(/^lic\.\s*/i, "").trim()}`;
+}
+
 function reviewerName(people = []) {
   const reviewer = people.find((person) => normalizeText(personRole(person)).includes("jefe"));
   return personName(reviewer);
@@ -825,6 +833,7 @@ function reviewerName(people = []) {
 function outgoingWordDocumentXml(templateXml, item, people = []) {
   const createdAt = item.createdAt || new Date().toISOString().slice(0, 10);
   const elaboratedBy = authorNameForItem(item, people);
+  const signedBy = "Lic. Jesus Bernardo Diaz de Leon Gutiérrez";
   const body = [
     docxParagraph(`Rincon de Romos, Ags., a ${formatLongSpanishDate(createdAt)}`, { align: "right" }),
     docxParagraph(""),
@@ -839,7 +848,9 @@ function outgoingWordDocumentXml(templateXml, item, people = []) {
     docxParagraph("ATENTAMENTE", { align: "center", bold: true }),
     docxParagraph(""),
     docxParagraph(""),
-    docxParagraph(elaboratedBy, { align: "center", bold: true }),
+    docxParagraph(signedBy, { align: "center", bold: true, textTransform: "uppercase" }),
+    docxParagraph("DIRECTOR DE PLANEACIÓN Y DESARROLLO URBANO" , { align: "center" }),
+    docxParagraph("DEL MUNICIPIO DE RINCÓN DE ROMOS, AGS." , { align: "center" }),
   ].join("");
   const withReviewTable = replaceReviewTable(templateXml, elaboratedBy, reviewerName(people));
   return withReviewTable.replace(/(<w:sectPr[\s\S]*?<\/w:sectPr>)/, `${body}$1`);

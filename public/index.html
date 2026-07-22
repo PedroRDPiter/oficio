@@ -174,7 +174,7 @@
                 <label>
                   Estado inicial
                   <select name="status">
-                    <option value="Pendiente de asignacion">Pendiente de asignacion</option>
+                    <option value="Pendiente de asignacion">Pendiente por asignar</option>
                     <option value="En revision">En revision</option>
                   </select>
                 </label>
@@ -203,10 +203,11 @@
                   <input id="searchIncoming" type="search" placeholder="Buscar oficio">
                   <select id="statusFilter" aria-label="Filtrar estado">
                     <option value="">Todos</option>
-                    <option>Pendiente de asignacion</option>
+                    <option value="Pendiente de asignacion">Pendiente por asignar</option>
                     <option>En revision</option>
                     <option>Asignado</option>
-                    <option>Respondido</option>
+                    <option>En proceso con retraso</option>
+                    <option>Completado</option>
                   </select>
                   <select id="priorityFilter" aria-label="Filtrar prioridad">
                     <option value="">Todas las prioridades</option>
@@ -236,7 +237,7 @@
           <div class="split-layout">
             <form class="panel form-panel" id="outgoingForm">
               <div class="panel-heading">
-                <h2>Generar oficio interno</h2>
+                <h2 id="outgoingFormTitle">Generar oficio interno</h2>
                 <span class="badge" id="nextBadge">Siguiente 001</span>
               </div>
 
@@ -281,7 +282,7 @@
               </label>
 
               <div class="form-actions">
-                <button class="button primary" type="submit">Asignar y guardar oficio</button>
+                <button class="button primary" type="submit" id="outgoingSubmitBtn">Asignar y guardar oficio</button>
               </div>
             </form>
 
@@ -518,13 +519,72 @@
       </form>
     </dialog>
 
+    <dialog id="outgoingEditDialog">
+      <form id="outgoingEditForm" class="dialog-body">
+        <div class="panel-heading">
+          <div>
+            <h2 id="outgoingEditTitle">Editar oficio</h2>
+            <span class="subtle-text" id="outgoingEditMeta">Consecutivo asignado</span>
+          </div>
+          <button class="icon-button" aria-label="Cerrar" type="button" data-close-outgoing-edit>x</button>
+        </div>
+        <input type="hidden" name="id">
+        <div class="field-grid">
+          <label>
+            Prefijo
+            <input name="prefixLabel" readonly>
+          </label>
+          <label>
+            Fecha
+            <input name="createdAtLabel" readonly>
+          </label>
+        </div>
+        <label>
+          Destinatario
+          <input name="recipient" autocomplete="organization" autocapitalize="words" required>
+        </label>
+        <label>
+          Asunto
+          <textarea name="subject" rows="3" required></textarea>
+        </label>
+        <label>
+          Responsable que elabora
+          <select name="author" id="editAuthorSelect"></select>
+        </label>
+        <label>
+          Reemplazar oficio firmado o borrador
+          <input name="document" type="file" accept=".pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+        </label>
+        <div class="form-actions">
+          <button class="button ghost" type="button" data-close-outgoing-edit>Cancelar</button>
+          <button class="button primary" type="submit">Guardar cambios</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="documentPreviewDialog" class="document-preview-dialog">
+      <div class="dialog-body preview-dialog-body">
+        <div class="panel-heading preview-heading">
+          <div>
+            <h2 id="documentPreviewTitle">Vista previa del documento</h2>
+            <span class="subtle-text" id="documentPreviewMeta">Generando vista previa...</span>
+          </div>
+          <button class="icon-button" aria-label="Cerrar" type="button" data-close-document-preview>x</button>
+        </div>
+        <div class="document-preview-content" id="documentPreviewContent" aria-live="polite"></div>
+        <div class="form-actions">
+          <button class="button ghost" type="button" data-close-document-preview>Cerrar</button>
+          <button class="button ghost" type="button" id="downloadPreviewDocumentBtn">Descargar Word</button>
+        </div>
+      </div>
+    </dialog>
+
     <template id="emptyTemplate">
       <div class="empty-state">
         <strong>Sin registros</strong>
         <span>Cuando captures informacion aparecera aqui.</span>
       </div>
     </template>
-
-    <script src="app.js?v=45" type="module"></script>
+    <script src="app.js?v=58" type="module"></script>
   </body>
 </html>

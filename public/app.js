@@ -15,6 +15,7 @@ const ALLOWED_DOCUMENT_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 const XLSX_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs";
+const MAMMOTH_URL = "https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js";
 const LOCAL_API_TOKEN_KEY = "oficios-local-api-token";
 const LOCAL_NOTIFICATION_SETTINGS_KEY = "oficios-notification-settings";
 const REMINDER_STATE_KEY = "oficios-reminders-shown";
@@ -289,6 +290,11 @@ function createOutgoing(value) {
       body: JSON.stringify(value),
     });
   }
+  return put("outgoing", value);
+}
+
+function updateOutgoing(value) {
+  if (supabaseOnline) return supabaseUpdateOutgoing(value);
   return put("outgoing", value);
 }
 
@@ -594,18 +600,96 @@ function outgoingWordHref(item) {
   return `${base}/api/outgoing-word/${encodeURIComponent(item.id)}`;
 }
 
-async function downloadOutgoingWord(item) {
+async function outgoingWordBlob(item) {
   const response = await fetch(outgoingWordHref(item), { headers: apiHeaders() });
   if (!response.ok) throw new Error(`No se pudo descargar el oficio (${response.status}).`);
-  const blob = await response.blob();
+  return response.blob();
+}
+
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = oficioDownloadName(item.fullNumber, "oficio.docx");
+  link.download = filename;
   document.body.append(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function downloadOutgoingWord(item) {
+  const blob = await outgoingWordBlob(item);
+  downloadBlob(blob, oficioDownloadName(item.fullNumber, "oficio.docx"));
+}
+
+const documentPreviewState = {
+  item: null,
+  blob: null,
+  html: "",
+};
+
+function resetDocumentPreview() {
+  documentPreviewState.item = null;
+  documentPreviewState.blob = null;
+  documentPreviewState.html = "";
+  const content = $("#documentPreviewContent");
+  if (content) content.innerHTML = "";
+}
+
+async function previewOutgoingWord(item) {
+  const dialog = $("#documentPreviewDialog");
+  const title = $("#documentPreviewTitle");
+  const meta = $("#documentPreviewMeta");
+  const content = $("#documentPreviewContent");
+  if (!dialog || !title || !meta || !content) return;
+
+  resetDocumentPreview();
+  documentPreviewState.item = item;
+  title.textContent = `Vista previa ${item.fullNumber}`;
+  meta.textContent = "Generando vista previa...";
+  content.innerHTML = `<div class="empty-state compact"><strong>Cargando documento</strong><span>Preparando lectura previa.</span></div>`;
+  dialog.showModal();
+
+  const [mammoth, blob] = await Promise.all([loadMammoth(), outgoingWordBlob(item)]);
+  const result = await mammoth.convertToHtml({ arrayBuffer: await blob.arrayBuffer() });
+  documentPreviewState.blob = blob;
+  documentPreviewState.html = result.value || "<p>Documento sin contenido para previsualizar.</p>";
+  meta.textContent = `${item.createdAt || today()} - ${item.recipient || "Sin destinatario"}`;
+  content.innerHTML = documentPreviewState.html;
+}
+
+function printDocumentPreview() {
+  if (!documentPreviewState.html) return;
+  const item = documentPreviewState.item || {};
+  const printWindow = window.open("", "_blank", "noopener,noreferrer");
+  if (!printWindow) {
+    showMessage("El navegador bloqueo la ventana de impresion.", "error");
+    return;
+  }
+  printWindow.document.write(`
+    <!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8">
+        <title>${escapeHtml(item.fullNumber || "Vista previa")}</title>
+        <style>
+          body { margin: 0; background: #f4f4f0; color: #18211d; font-family: Arial, sans-serif; }
+          main { width: min(8.5in, calc(100vw - 32px)); min-height: 11in; margin: 18px auto; background: white; padding: 0.75in; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+          p { line-height: 1.45; }
+          table { width: 100%; border-collapse: collapse; }
+          td, th { border: 1px solid #d7ded9; padding: 6px; vertical-align: top; }
+          @media print {
+            body { background: white; }
+            main { width: auto; min-height: auto; margin: 0; padding: 0; box-shadow: none; }
+          }
+        </style>
+      </head>
+      <body><main>${documentPreviewState.html}</main></body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
 }
 
 async function uploadLocalDocument(documentRecord, ownerId, folderName) {
@@ -742,6 +826,18 @@ async function supabasePut(store, value) {
   return data;
 }
 
+async function supabaseUpdateOutgoing(value) {
+  requireRole("admin", "director", "ventanilla");
+  const payload = outgoingToDb(value);
+  const { data, error } = await supabase
+    .from(SUPABASE_TABLES.outgoing)
+    .upsert(payload)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 async function supabaseRemove(store, id) {
   if (store === "people" || store === "outgoing") requireRole("admin");
   if (store === "incoming") requireRole("admin", "director");
@@ -814,10 +910,31 @@ function nextOutgoingFullNumber(prefixValue, dateValue) {
 
 function statusClass(value = "") {
   const normalized = normalize(value);
-  if (normalized.includes("respondido")) return " done";
-  if (normalized.includes("asignado")) return " assigned";
-  if (normalized.includes("revision")) return " review";
+  if (normalized.includes("completado")) return " done";
+  if (normalized.includes("retraso")) return " delayed";
+  if (normalized.includes("pendiente")) return " pending";
+  if (normalized.includes("asignado") || normalized.includes("revision") || normalized.includes("respondido")) return " review";
   return " pending";
+}
+
+function statusTrafficLabel(value = "") {
+  const normalized = normalize(value);
+  if (normalized.includes("completado")) return "Completado";
+  if (normalized.includes("retraso")) return "En proceso con retraso";
+  if (normalized.includes("pendiente")) return "Pendiente por asignar";
+  return "En proceso";
+}
+
+function isIncomingCompleted(item) {
+  return item.status === "Completado";
+}
+
+function incomingEffectiveStatus(item) {
+  if (isIncomingCompleted(item)) return "Completado";
+  if (!getAssigneeNames(item).length) return "Pendiente de asignacion";
+  const due = dueDateTime(item);
+  if (due && due.getTime() < Date.now()) return "En proceso con retraso";
+  return item.status;
 }
 
 function normalizePhone(value = "") {
@@ -872,6 +989,17 @@ function normalizeAgendaItem(item) {
   };
 }
 
+function agendaDateTime(item) {
+  const timeValue = item.time || "23:59";
+  const date = new Date(`${item.date}T${timeValue}:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isAgendaPast(item) {
+  const date = agendaDateTime(item);
+  return Boolean(date && date.getTime() < Date.now());
+}
+
 function assignmentNote(item) {
   return item.instructions || item.instrucciones || item.assignmentNote || item.assignmentNotes || "";
 }
@@ -889,7 +1017,7 @@ function dueDateTime(item) {
 
 function dueSummary(item) {
   const due = dueDateTime(item);
-  if (!due || item.status === "Respondido") return "";
+  if (!due || isIncomingCompleted(item)) return "";
   const diffMs = due.getTime() - Date.now();
   const absHours = Math.abs(diffMs) / 36e5;
   const days = Math.floor(absHours / 24);
@@ -901,7 +1029,7 @@ function dueSummary(item) {
 
 function dueClass(item) {
   const due = dueDateTime(item);
-  if (!due || item.status === "Respondido") return "";
+  if (!due || isIncomingCompleted(item)) return "";
   const hours = (due.getTime() - Date.now()) / 36e5;
   if (hours < 0) return " overdue";
   if (hours <= 24) return " urgent";
@@ -951,7 +1079,7 @@ function matchesDueFilter(item, filter) {
   const due = dateOnly(item.dueAt);
   const now = dateOnly(today());
   const diffDays = Math.round((due.getTime() - now.getTime()) / 86400000);
-  if (filter === "overdue") return diffDays < 0 && item.status !== "Respondido";
+  if (filter === "overdue") return diffDays < 0 && !isIncomingCompleted(item);
   if (filter === "today") return diffDays === 0;
   if (filter === "week") return diffDays >= 0 && diffDays <= 7;
   return true;
@@ -993,6 +1121,22 @@ function loadXlsx() {
   return xlsxPromise;
 }
 
+let mammothPromise;
+function loadMammoth() {
+  if (window.mammoth) return Promise.resolve(window.mammoth);
+  if (!mammothPromise) {
+    mammothPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = MAMMOTH_URL;
+      script.async = true;
+      script.onload = () => window.mammoth ? resolve(window.mammoth) : reject(new Error("No se pudo cargar el previsualizador."));
+      script.onerror = () => reject(new Error("No se pudo cargar el previsualizador de Word."));
+      document.head.append(script);
+    });
+  }
+  return mammothPromise;
+}
+
 async function loadState() {
   const [people, settingsRows] = await Promise.all([
     getAll("people"),
@@ -1022,7 +1166,7 @@ async function loadState() {
 
 async function seedPeople() {
   const starter = [
-    { id: uid(), name: "Director", role: "Director de Planeacion y Desarrollo Urbano", email: state.settings.directorEmail },
+    { id: uid(), name: "Lic. Jesus Bernardo Diaz de Leon Gutiérrez", role: "Director de Planeacion y Desarrollo Urbano", email: state.settings.directorEmail },
     { id: uid(), name: "Ventanilla", role: "Recepción documental", email: "" },
     { id: uid(), name: "Tecnico de Desarrollo Urbano", role: "Respuesta tecnica", email: "" },
   ];
@@ -1057,7 +1201,7 @@ function renderPermissions() {
 }
 
 function renderStats() {
-  const pending = state.incoming.filter((item) => item.status !== "Respondido").length;
+  const pending = state.incoming.filter((item) => !isIncomingCompleted(item)).length;
   const assigned = state.incoming.filter((item) => getAssigneeNames(item).length).length;
   const outgoingForm = $("#outgoingForm");
   const nextFullNumber = nextOutgoingFullNumber(
@@ -1123,16 +1267,17 @@ function renderIncoming() {
   const assignee = $("#assigneeFilter")?.value || "";
   const due = $("#dueFilter")?.value || "";
   const rows = state.incoming.filter((item) => {
+    const effectiveStatus = incomingEffectiveStatus(item);
     const matchesText = !q || normalize(`${item.folio} ${item.sender} ${item.subject} ${getAssigneeNames(item).join(" ")}`).includes(q);
-    const matchesStatus = !status || item.status === status;
+    const matchesStatus = !status || effectiveStatus === status;
     const matchesPriority = !priority || item.priority === priority;
     const matchesAssignee = !assignee || getAssigneeNames(item).includes(assignee);
     return matchesText && matchesStatus && matchesPriority && matchesAssignee && matchesDueFilter(item, due);
   });
   if (!rows.length) return renderEmpty(list);
   list.innerHTML = rows.map((item) => {
-    const priorityClass = item.priority === "Alta" || item.priority === "Urgente" ? " high" : "";
-    const statusPillClass = statusClass(item.status);
+    const effectiveStatus = incomingEffectiveStatus(item);
+    const statusPillClass = statusClass(effectiveStatus);
     const documentHref = safeDocumentHref(item.document?.url || item.document?.dataUrl);
     const responseDocumentHref = safeDocumentHref(item.responseDocument?.url || item.responseDocument?.dataUrl);
     const dueText = dueSummary(item);
@@ -1145,19 +1290,15 @@ function renderIncoming() {
         <div class="record-main">
           <div class="record-title">
             <strong>${escapeHtml(item.folio)} - ${escapeHtml(item.sender)}</strong>
-            <span class="pill${priorityClass}">${escapeHtml(item.priority)}</span>
+            <span class="status-pill${statusPillClass}">${escapeHtml(statusTrafficLabel(effectiveStatus))}</span>
           </div>
           <p class="record-subject">${escapeHtml(item.subject)}</p>
           <div class="meta">
-            <span class="status-pill${statusPillClass}">${escapeHtml(item.status)}</span>
             <span class="meta-chip">Recibido: ${escapeHtml(item.receivedAt)}</span>
             <span class="meta-chip">Creado: ${escapeHtml((item.createdAt || "").slice(0, 10))}</span>
-            <span class="meta-chip">Guardado: ${escapeHtml(storageModeLabel())}</span>
             ${getAssigneeNames(item).length ? `<span class="meta-chip">Asignado a: ${escapeHtml(getAssigneeNames(item).join(", "))}</span>` : ""}
             ${item.dueAt ? `<span class="meta-chip due-chip${dueClass(item)}">Limite: ${escapeHtml(item.dueAt)}${dueText ? ` · ${escapeHtml(dueText)}` : ""}</span>` : ""}
-            ${item.responseAt ? `<span class="meta-chip">Respondido: ${escapeHtml(item.responseAt)}</span>` : ""}
-            ${item.document ? `<span class="meta-chip">Escaneo adjunto</span>` : `<span class="meta-chip">Sin escaneo</span>`}
-            ${item.responseDocument ? `<span class="meta-chip">Respuesta adjunta</span>` : ""}
+            ${item.responseAt ? `<span class="meta-chip">Respuesta: ${escapeHtml(item.responseAt)}</span>` : ""}
           </div>
           ${item.notes ? `<div class="response-summary muted"><strong>Observaciones</strong><p>${escapeHtml(item.notes)}</p></div>` : ""}
           ${assignmentNote(item) ? `<div class="response-summary muted"><strong>Notas de asignacion</strong><p>${escapeHtml(assignmentNote(item))}</p></div>` : ""}
@@ -1183,6 +1324,35 @@ function outgoingAuthorLabel(item) {
   return person?.name || "Sin responsable";
 }
 
+function resetOutgoingForm() {
+  const form = $("#outgoingForm");
+  if (!form) return;
+  form.dataset.dirty = "false";
+  form.reset();
+  form.elements.prefix.value = "DPDU";
+  form.elements.createdAt.value = today();
+  form.elements.prefix.style.setProperty("--prefix-color", prefixOption("DPDU").color);
+  renderStats();
+}
+
+function openOutgoingEditor(item) {
+  const form = $("#outgoingEditForm");
+  if (!form || !item) return;
+  form.reset();
+  form.dataset.dirty = "false";
+  form.elements.id.value = item.id;
+  form.elements.prefixLabel.value = normalizePrefix(item.prefix);
+  form.elements.createdAtLabel.value = item.createdAt || today();
+  form.elements.recipient.value = item.recipient || "";
+  form.elements.subject.value = item.subject || "";
+  form.elements.author.value = outgoingAuthorLabel(item) === "Sin responsable" ? "" : outgoingAuthorLabel(item);
+  form.elements.document.value = "";
+  $("#outgoingEditTitle").textContent = `Editar ${item.fullNumber}`;
+  $("#outgoingEditMeta").textContent = `${normalizePrefix(item.prefix)} - ${item.createdAt || today()}`;
+  $("#outgoingEditDialog")?.showModal();
+  form.elements.recipient.focus();
+}
+
 function renderOutgoing() {
   const list = $("#outgoingList");
   const q = normalize($("#searchOutgoing").value);
@@ -1195,31 +1365,36 @@ function renderOutgoing() {
     return matchesText && matchesPrefix && matchesAuthor;
   });
   if (!rows.length) return renderEmpty(list);
-  list.innerHTML = rows.map((item) => `
-    <article class="record-card">
-      <div class="record-title">
-        <strong class="code-number">${escapeHtml(item.fullNumber)}</strong>
-        <span class="pill">${escapeHtml(item.createdAt)}</span>
-      </div>
-      <p class="record-subject">${escapeHtml(item.subject)}</p>
-      <div class="meta">
-        <span class="prefix-pill" style="${escapeHtml(prefixStyle(item.prefix))}">${escapeHtml(normalizePrefix(item.prefix))}</span>
-        <span class="meta-chip">Para: ${escapeHtml(item.recipient)}</span>
-        <span class="meta-chip">Realizo: ${escapeHtml(outgoingAuthorLabel(item))}</span>
-        ${item.document ? `<span class="meta-chip">Oficio guardado</span>` : ""}
-      </div>
-      <div class="card-actions">
-        <button class="button primary soft-primary" type="button" data-download-outgoing-word="${escapeHtml(item.id)}">Descargar oficio membretado</button>
-        ${item.document ? `<a class="button ghost" href="${escapeHtml(safeDocumentHref(item.document.url || item.document.dataUrl))}" target="_blank" rel="noopener" download="${escapeHtml(oficioDownloadName(item.fullNumber, item.document.name))}">Ver oficio guardado</a>` : ""}
-        ${hasRole("admin") ? `<button class="link-button" type="button" data-delete-outgoing="${item.id}">Eliminar</button>` : ""}
-      </div>
-    </article>
-  `).join("");
+  list.innerHTML = rows.map((item) => {
+    const canEdit = hasRole("admin", "director", "ventanilla");
+    return `
+      <article class="record-card">
+        <div class="record-title">
+          <strong class="code-number">${escapeHtml(item.fullNumber)}</strong>
+          <span class="pill">${escapeHtml(item.createdAt)}</span>
+        </div>
+        <p class="record-subject">${escapeHtml(item.subject)}</p>
+        <div class="meta">
+          <span class="prefix-pill" style="${escapeHtml(prefixStyle(item.prefix))}">${escapeHtml(normalizePrefix(item.prefix))}</span>
+          <span class="meta-chip">Para: ${escapeHtml(item.recipient)}</span>
+          <span class="meta-chip">Realizo: ${escapeHtml(outgoingAuthorLabel(item))}</span>
+          ${item.document ? `<span class="meta-chip">Oficio guardado</span>` : ""}
+        </div>
+        <div class="card-actions">
+          <button class="button primary soft-primary" type="button" data-download-outgoing-word="${escapeHtml(item.id)}">Descargar Word</button>
+          <button class="button ghost" type="button" data-preview-outgoing-word="${escapeHtml(item.id)}">Previsualizar oficio</button>
+          ${canEdit ? `<button class="button ghost" type="button" data-edit-outgoing="${escapeHtml(item.id)}">Editar</button>` : ""}
+          ${item.document ? `<a class="button ghost" href="${escapeHtml(safeDocumentHref(item.document.url || item.document.dataUrl))}" target="_blank" rel="noopener" download="${escapeHtml(oficioDownloadName(item.fullNumber, item.document.name))}">Ver oficio guardado</a>` : ""}
+          ${hasRole("admin") ? `<button class="link-button" type="button" data-delete-outgoing="${item.id}">Eliminar</button>` : ""}
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderCalendar() {
   const pending = state.incoming
-    .filter((item) => item.dueAt && item.status !== "Respondido")
+    .filter((item) => item.dueAt && !isIncomingCompleted(item))
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   const agendaRows = state.agenda
     .slice()
@@ -1254,11 +1429,6 @@ function renderCalendar() {
   const monthFinish = monthEnd.toISOString().slice(0, 10);
   const monthPending = pending.filter((item) => item.dueAt >= monthStart && item.dueAt <= monthFinish);
   const monthAgenda = agendaRows.filter((item) => item.date >= monthStart && item.date <= monthFinish);
-  const monthUrgent = monthPending.filter((item) => [" urgent", " overdue"].includes(dueClass(item))).length;
-  const activeDays = new Set([
-    ...monthPending.map((item) => item.dueAt),
-    ...monthAgenda.map((item) => item.date),
-  ]).size;
   const title = $("#calendarTitle");
   if (title) {
     title.textContent = month.toLocaleDateString("es-MX", { month: "long", year: "numeric" });
@@ -1266,12 +1436,7 @@ function renderCalendar() {
 
   const summary = $("#calendarSummary");
   if (summary) {
-    summary.innerHTML = `
-      <span><strong>${monthPending.length}</strong> asignacion${monthPending.length === 1 ? "" : "es"}</span>
-      <span><strong>${monthAgenda.length}</strong> registro${monthAgenda.length === 1 ? "" : "s"} de agenda</span>
-      <span><strong>${activeDays}</strong> dia${activeDays === 1 ? "" : "s"} con actividad</span>
-      <span class="${monthUrgent ? "is-urgent" : ""}"><strong>${monthUrgent}</strong> urgente${monthUrgent === 1 ? "" : "s"}</span>
-    `;
+    summary.innerHTML = "";
   }
 
   const legend = $("#calendarLegend");
@@ -1308,13 +1473,13 @@ function renderCalendar() {
       })),
       ...agendaItems.map((item) => ({
         type: "agenda",
-        className: " agenda-activity",
+        className: ` agenda-activity${isAgendaPast(item) ? " realized" : ""}`,
         color: agendaColor(item),
-        label: item.time || "Agenda",
+        label: isAgendaPast(item) ? "Realizada" : item.time || "Agenda",
         title: item.title,
         detail: getAgendaParticipants(item).join(", ") || "Sin participantes",
         note: item.notes,
-        tooltip: `${item.title}\nParticipan: ${getAgendaParticipants(item).join(", ") || "Sin participantes"}${item.notes ? `\nNotas: ${item.notes}` : ""}`,
+        tooltip: `${item.title}\nEstado: ${isAgendaPast(item) ? "Realizada" : "Pendiente"}\nParticipan: ${getAgendaParticipants(item).join(", ") || "Sin participantes"}${item.notes ? `\nNotas: ${item.notes}` : ""}`,
       })),
     ];
     const visibleActivities = activities.slice(0, 3);
@@ -1360,7 +1525,7 @@ function calendarDateLabel(dateValue) {
 
 function activitiesForDate(dateValue) {
   const pending = state.incoming
-    .filter((item) => item.dueAt === dateValue && item.status !== "Respondido")
+    .filter((item) => item.dueAt === dateValue && !isIncomingCompleted(item))
     .sort((a, b) => a.folio.localeCompare(b.folio));
   const agendaRows = state.agenda
     .filter((item) => item.date === dateValue)
@@ -1411,12 +1576,13 @@ function renderCalendarDayDetails(dateValue) {
       </article>
     `).join("")}
     ${agendaRows.map((item) => `
-      <article class="calendar-detail-card agenda-detail-card" style="--user-color: ${agendaColor(item)}">
+      <article class="calendar-detail-card agenda-detail-card${isAgendaPast(item) ? " realized" : ""}" style="--user-color: ${agendaColor(item)}">
         <div class="calendar-detail-heading">
-          <span class="badge">Agenda</span>
+          <span class="badge">${isAgendaPast(item) ? "Realizada" : "Agenda"}</span>
           <strong>${escapeHtml(item.time || "Sin hora")} - ${escapeHtml(item.title)}</strong>
         </div>
         <div class="meta">
+          ${isAgendaPast(item) ? `<span class="meta-chip realized-chip">Estado: Realizada</span>` : ""}
           <span class="meta-chip">Participan: ${escapeHtml(getAgendaParticipants(item).join(", ") || "Sin participantes")}</span>
         </div>
         ${item.notes ? `<p class="calendar-note"><strong>Nota:</strong> ${escapeHtml(item.notes)}</p>` : ""}
@@ -1459,6 +1625,7 @@ function renderAssignmentDocument(item) {
 function fillSelects() {
   const options = state.people.map((person) => `<option value="${escapeHtml(person.name)}">${escapeHtml(person.name)} - ${escapeHtml(person.role)}</option>`).join("");
   $("#authorSelect").innerHTML = options;
+  if ($("#editAuthorSelect")) $("#editAuthorSelect").innerHTML = options;
   const assigneeChecklist = $("#assigneeChecklist");
   if (assigneeChecklist) {
     assigneeChecklist.innerHTML = state.people.map((person) => `
@@ -1631,7 +1798,7 @@ function ensureNotificationCenter() {
   center.innerHTML = `
     <div class="notification-card" role="status">
       <div class="notification-heading">
-        <div>
+        <div>cam
           <span class="notification-kicker">Notificacion</span>
           <strong id="notificationTitle"></strong>
         </div>
@@ -1792,7 +1959,7 @@ function checkDueReminders() {
   const shown = loadReminderState();
   let changed = false;
   state.incoming
-    .filter((item) => item.dueAt && item.status !== "Respondido")
+    .filter((item) => item.dueAt && !isIncomingCompleted(item))
     .forEach((item) => {
       const due = dueDateTime(item);
       if (!due) return;
@@ -1981,6 +2148,16 @@ function bindCalendarControls() {
       $("#calendarDayDialog")?.close();
     });
   });
+  $$("[data-close-document-preview]").forEach((button) => {
+    button.addEventListener("click", () => {
+      $("#documentPreviewDialog")?.close();
+      resetDocumentPreview();
+    });
+  });
+  $("#downloadPreviewDocumentBtn")?.addEventListener("click", () => {
+    if (!documentPreviewState.blob || !documentPreviewState.item) return;
+    downloadBlob(documentPreviewState.blob, oficioDownloadName(documentPreviewState.item.fullNumber, "oficio.docx"));
+  });
 }
 
 function nextQuarterHour() {
@@ -2013,7 +2190,7 @@ function openAgendaDialog(dateValue = today()) {
 }
 
 function bindForms() {
-  const trackedForms = ["incomingForm", "outgoingForm", "personForm", "settingsForm", "agendaForm"];
+  const trackedForms = ["incomingForm", "outgoingForm", "outgoingEditForm", "personForm", "settingsForm", "agendaForm"];
   trackedForms.forEach((id) => {
     const form = $(`#${id}`);
     if (!form) return;
@@ -2025,7 +2202,7 @@ function bindForms() {
   });
 
   $("#incomingForm").elements.receivedAt.value = today();
-  $("#outgoingForm").elements.createdAt.value = today();
+  resetOutgoingForm();
   if ($("#agendaForm")) {
     resetAgendaForm();
   }
@@ -2035,6 +2212,16 @@ function bindForms() {
   $("#prefixSelect")?.addEventListener("change", (event) => {
     event.currentTarget.style.setProperty("--prefix-color", prefixOption(event.currentTarget.value).color);
     renderStats();
+  });
+  $$("[data-close-outgoing-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      $("#outgoingEditDialog")?.close();
+      const form = $("#outgoingEditForm");
+      if (form) {
+        form.reset();
+        form.dataset.dirty = "false";
+      }
+    });
   });
 
   $("#incomingForm").addEventListener("submit", async (event) => {
@@ -2079,16 +2266,17 @@ function bindForms() {
       const form = event.currentTarget;
       const data = Object.fromEntries(new FormData(form));
       const prefix = normalizePrefix(data.prefix);
-      const number = nextOutgoingNumber(prefix, data.createdAt);
-      const year = outgoingYear(data.createdAt);
+      const createdAt = data.createdAt;
+      const number = nextOutgoingNumber(prefix, createdAt);
+      const fullNumber = `${prefix}-${String(number).padStart(3, "0")}/${outgoingYear(createdAt)}`;
       const documentFile = form.elements.document?.files[0];
       const authorPerson = state.people.find((person) => person.name === data.author);
       const item = {
         id: uid(),
         number,
-        fullNumber: `${prefix}-${String(number).padStart(3, "0")}/${year}`,
+        fullNumber,
         prefix,
-        createdAt: data.createdAt,
+        createdAt,
         recipient: data.recipient.trim(),
         subject: data.subject.trim(),
         author: data.author,
@@ -2096,15 +2284,43 @@ function bindForms() {
         document: await fileToRecord(documentFile),
       };
       await createOutgoing(item);
-      form.dataset.dirty = "false";
-      form.reset();
-      form.elements.prefix.value = "DPDU";
-      form.elements.createdAt.value = today();
-      form.elements.prefix.style.setProperty("--prefix-color", prefixOption("DPDU").color);
+      resetOutgoingForm();
       await refresh();
       showMessage("Consecutivo guardado correctamente.", "success");
     } catch (error) {
       showMessage(`No se pudo guardar el consecutivo: ${describeError(error)}`, "error");
+    } finally {
+      setButtonLoading(submitter, false);
+    }
+  });
+
+  $("#outgoingEditForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    setButtonLoading(submitter, true, "Guardando...");
+    try {
+      const form = event.currentTarget;
+      const data = Object.fromEntries(new FormData(form));
+      const editingItem = state.outgoing.find((row) => row.id === data.id);
+      if (!editingItem) throw new Error("No se encontro el oficio expedido para editar.");
+      const documentFile = form.elements.document?.files[0];
+      const authorPerson = state.people.find((person) => person.name === data.author);
+      const item = {
+        ...editingItem,
+        recipient: data.recipient.trim(),
+        subject: data.subject.trim(),
+        author: data.author,
+        authorId: authorPerson?.id || "",
+        document: await fileToRecord(documentFile) || editingItem.document || null,
+      };
+      await updateOutgoing(item);
+      form.dataset.dirty = "false";
+      form.reset();
+      $("#outgoingEditDialog")?.close();
+      await refresh();
+      showMessage("Oficio expedido actualizado correctamente.", "success");
+    } catch (error) {
+      showMessage(`No se pudo actualizar el oficio: ${describeError(error)}`, "error");
     } finally {
       setButtonLoading(submitter, false);
     }
@@ -2246,12 +2462,12 @@ function bindForms() {
       item.responseAt = data.responseAt;
       item.responseText = data.responseText.trim();
       item.responseDocument = await fileToRecord(responseFile) || item.responseDocument || null;
-      item.status = "Respondido";
+      item.status = "Completado";
       await put("incoming", item);
       $("#responseDialog").close();
       form.reset();
       await refresh();
-      showMessage("Respuesta guardada correctamente.", "success");
+      showMessage("Respuesta guardada y oficio completado correctamente.", "success");
     } catch (error) {
       showMessage(`No se pudo guardar la respuesta: ${describeError(error)}`, "error");
     } finally {
@@ -2330,6 +2546,26 @@ function bindLists() {
     if (target.dataset.email) {
       const item = state.incoming.find((row) => row.id === target.dataset.email);
       if (item) openDirectorEmail(item);
+      return;
+    }
+
+    if (target.dataset.editOutgoing) {
+      const item = state.outgoing.find((row) => row.id === target.dataset.editOutgoing);
+      if (item) openOutgoingEditor(item);
+      return;
+    }
+
+    if (target.dataset.previewOutgoingWord) {
+      setButtonLoading(target, true, "Generando...");
+      try {
+        const item = state.outgoing.find((row) => row.id === target.dataset.previewOutgoingWord);
+        if (item) await previewOutgoingWord(item);
+      } catch (error) {
+        $("#documentPreviewDialog")?.close();
+        showMessage(`No se pudo previsualizar el oficio: ${describeError(error)}`, "error");
+      } finally {
+        setButtonLoading(target, false);
+      }
       return;
     }
 
@@ -2445,63 +2681,129 @@ function bindLists() {
 }
 
 function excelRows() {
+  const exportedAt = new Date();
   return {
-    Metadatos: [{
-      schema_version: DATA_SCHEMA_VERSION,
-      exported_at: new Date().toISOString(),
-      app: "Control de Oficios DPDU",
-    }],
-    Recibidos: state.incoming.map((item) => ({
-      id: item.id,
-      folio: item.folio,
-      fecha_recepcion: item.receivedAt,
-      remitente: item.sender,
-      asunto: item.subject,
-      prioridad: item.priority,
-      estado: item.status,
-      responsables: getAssigneeNames(item).join("; "),
-      fecha_limite: item.dueAt || "",
-      instrucciones: assignmentNote(item),
-      fecha_respuesta: item.responseAt || "",
-      observaciones: item.notes || "",
-      respuesta: item.responseText || "",
+    Resumen: [
+      { Concepto: "Archivo", Detalle: "Respaldo general de Control de Oficios" },
+      { Concepto: "Fecha de exportacion", Detalle: exportedAt.toLocaleString("es-MX") },
+      { Concepto: "Oficios recibidos", Detalle: state.incoming.length },
+      { Concepto: "Oficios generados", Detalle: state.outgoing.length },
+      { Concepto: "Personas en directorio", Detalle: state.people.length },
+      { Concepto: "Registros de agenda", Detalle: state.agenda.length },
+      { Concepto: "Nota", Detalle: "Las columnas de identificador interno ayudan a restaurar el respaldo en la app." },
+    ],
+    "Oficios recibidos": state.incoming.map((item) => ({
+      Folio: item.folio,
+      "Fecha de recepcion": item.receivedAt,
+      Remitente: item.sender,
+      Asunto: item.subject,
+      Prioridad: item.priority,
+      Estado: item.status,
+      Responsables: getAssigneeNames(item).join("; "),
+      "Fecha limite": item.dueAt || "",
+      "Instrucciones o notas de asignacion": assignmentNote(item),
+      "Fecha de respuesta": item.responseAt || "",
+      Observaciones: item.notes || "",
+      Respuesta: item.responseText || "",
+      "Identificador interno": item.id,
     })),
-    Consecutivos: state.outgoing.map((item) => ({
-      id: item.id,
-      numero: item.number,
-      numero_completo: item.fullNumber,
-      prefijo: item.prefix,
-      fecha: item.createdAt,
-      destinatario: item.recipient,
-      asunto: item.subject,
-      elaboro: item.author,
+    "Oficios generados": state.outgoing.map((item) => ({
+      "Numero consecutivo": item.number,
+      "Numero completo": item.fullNumber,
+      Area: item.prefix,
+      Fecha: item.createdAt,
+      Destinatario: item.recipient,
+      Asunto: item.subject,
+      Elaboro: item.author,
+      "Identificador interno": item.id,
     })),
-    Personal: state.people.map((person) => ({
-      id: person.id,
-      nombre: person.name,
-      cargo: person.role,
-      correo: person.email || "",
-      whatsapp: person.phone || "",
+    Directorio: state.people.map((person) => ({
+      Nombre: person.name,
+      Cargo: person.role,
+      Correo: person.email || "",
+      WhatsApp: person.phone || "",
+      "Identificador interno": person.id,
     })),
     Agenda: state.agenda.map((item) => ({
-      id: item.id,
-      titulo: item.title,
-      fecha: item.date,
-      hora: item.time || "",
-      participantes: getAgendaParticipants(item).join("; "),
-      notas: item.notes || "",
+      Titulo: item.title,
+      Fecha: item.date,
+      Hora: item.time || "",
+      Participantes: getAgendaParticipants(item).join("; "),
+      Notas: item.notes || "",
+      "Identificador interno": item.id,
     })),
     Configuracion: [{
-      id: "main",
-      siguiente_numero: state.settings.nextNumber,
-      correo_director: state.settings.directorEmail,
-      telefono_director: state.settings.directorPhone,
-      notificar_correo: state.settings.notifyEmail,
-      notificar_whatsapp: state.settings.notifyWhatsapp,
-      notificar_sistema: state.settings.notifySystem,
-      clave_borrado: ADMIN_DELETE_KEY,
+      "Siguiente numero": state.settings.nextNumber,
+      "Correo del director": state.settings.directorEmail,
+      "Telefono del director": state.settings.directorPhone,
+      "Notificar por correo": state.settings.notifyEmail ? "Si" : "No",
+      "Notificar por WhatsApp": state.settings.notifyWhatsapp ? "Si" : "No",
+      "Notificar en sistema": state.settings.notifySystem ? "Si" : "No",
+      "Clave de borrado": ADMIN_DELETE_KEY,
+      "Identificador interno": "main",
+    }],
+    "Datos tecnicos": [{
+      "Version de datos": DATA_SCHEMA_VERSION,
+      "Fecha tecnica de exportacion": exportedAt.toISOString(),
+      Aplicacion: "Control de Oficios DPDU",
     }],
   };
+}
+
+const EXCEL_HEADERS = {
+  Resumen: ["Concepto", "Detalle"],
+  "Oficios recibidos": [
+    "Folio",
+    "Fecha de recepcion",
+    "Remitente",
+    "Asunto",
+    "Prioridad",
+    "Estado",
+    "Responsables",
+    "Fecha limite",
+    "Instrucciones o notas de asignacion",
+    "Fecha de respuesta",
+    "Observaciones",
+    "Respuesta",
+    "Identificador interno",
+  ],
+  "Oficios generados": [
+    "Numero consecutivo",
+    "Numero completo",
+    "Area",
+    "Fecha",
+    "Destinatario",
+    "Asunto",
+    "Elaboro",
+    "Identificador interno",
+  ],
+  Directorio: ["Nombre", "Cargo", "Correo", "WhatsApp", "Identificador interno"],
+  Agenda: ["Titulo", "Fecha", "Hora", "Participantes", "Notas", "Identificador interno"],
+  Configuracion: [
+    "Siguiente numero",
+    "Correo del director",
+    "Telefono del director",
+    "Notificar por correo",
+    "Notificar por WhatsApp",
+    "Notificar en sistema",
+    "Clave de borrado",
+    "Identificador interno",
+  ],
+  "Datos tecnicos": ["Version de datos", "Fecha tecnica de exportacion", "Aplicacion"],
+};
+
+function excelHeaders(name, rows) {
+  return Object.keys(rows[0] || {}).length ? Object.keys(rows[0]) : EXCEL_HEADERS[name] || [];
+}
+
+function columnWidths(rows, headers) {
+  return headers.map((header) => {
+    const contentWidth = rows.reduce((width, row) => Math.max(width, String(row[header] ?? "").length), header.length);
+    return {
+      wch: Math.min(Math.max(contentWidth + 2, 12), 48),
+      hidden: header === "Identificador interno",
+    };
+  });
 }
 
 async function exportExcel() {
@@ -2509,66 +2811,93 @@ async function exportExcel() {
   const workbook = XLSX.utils.book_new();
   const rows = excelRows();
   Object.entries(rows).forEach(([name, data]) => {
-    const sheet = XLSX.utils.json_to_sheet(data);
+    const headers = excelHeaders(name, data);
+    const sheet = XLSX.utils.json_to_sheet(data, { header: headers });
+    sheet["!cols"] = columnWidths(data, headers);
+    if (sheet["!ref"]) {
+      const range = XLSX.utils.decode_range(sheet["!ref"]);
+      sheet["!autofilter"] = { ref: XLSX.utils.encode_range(range) };
+    }
     XLSX.utils.book_append_sheet(workbook, sheet, name);
   });
   XLSX.writeFile(workbook, `respaldo-oficios-${today()}.xlsx`);
 }
 
+function firstExistingSheet(workbook, names) {
+  return names.find((name) => workbook.Sheets[name]);
+}
+
+function rowValue(row, ...keys) {
+  const found = keys.find((key) => row[key] !== undefined && row[key] !== null && row[key] !== "");
+  return found ? row[found] : "";
+}
+
+function booleanValue(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return ["si", "true", "1", "yes"].includes(normalize(value));
+}
+
 function importedFromWorkbook(workbook, XLSX) {
   const sheet = (name) => XLSX.utils.sheet_to_json(workbook.Sheets[name] || {});
-  const metadata = sheet("Metadatos")[0] || {};
-  const schemaVersion = Number(metadata.schema_version || 0) || 0;
+  const metadataSheet = firstExistingSheet(workbook, ["Datos tecnicos", "Metadatos"]);
+  const metadata = metadataSheet ? sheet(metadataSheet)[0] || {} : {};
+  const schemaVersion = Number(rowValue(metadata, "Version de datos", "schema_version") || 0) || 0;
   if (schemaVersion > DATA_SCHEMA_VERSION) {
     throw new Error(`El respaldo usa una version de datos mas nueva (${schemaVersion}). Actualiza la app antes de importar.`);
   }
-  const incoming = sheet("Recibidos").map((row) => normalizeIncomingItem({
-    id: row.id || uid(),
-    folio: row.folio || "",
-    receivedAt: row.fecha_recepcion || today(),
-    sender: row.remitente || "",
-    subject: row.asunto || "",
-    priority: row.prioridad || "Normal",
-    status: row.estado || "Pendiente de asignacion",
-    assignees: String(row.responsables || "").split(";").map((value) => value.trim()).filter(Boolean),
-    dueAt: row.fecha_limite || "",
-    instructions: row.instrucciones || "",
-    responseAt: row.fecha_respuesta || "",
-    notes: row.observaciones || "",
-    responseText: row.respuesta || "",
+  const incomingSheet = firstExistingSheet(workbook, ["Oficios recibidos", "Recibidos"]);
+  const outgoingSheet = firstExistingSheet(workbook, ["Oficios generados", "Consecutivos"]);
+  const peopleSheet = firstExistingSheet(workbook, ["Directorio", "Personal"]);
+  const agendaSheet = firstExistingSheet(workbook, ["Agenda"]);
+  const configSheet = firstExistingSheet(workbook, ["Configuracion"]);
+  const incoming = (incomingSheet ? sheet(incomingSheet) : []).map((row) => normalizeIncomingItem({
+    id: rowValue(row, "Identificador interno", "id") || uid(),
+    folio: rowValue(row, "Folio", "folio"),
+    receivedAt: rowValue(row, "Fecha de recepcion", "fecha_recepcion") || today(),
+    sender: rowValue(row, "Remitente", "remitente"),
+    subject: rowValue(row, "Asunto", "asunto"),
+    priority: rowValue(row, "Prioridad", "prioridad") || "Normal",
+    status: rowValue(row, "Estado", "estado") || "Pendiente de asignacion",
+    assignees: String(rowValue(row, "Responsables", "responsables")).split(";").map((value) => value.trim()).filter(Boolean),
+    dueAt: rowValue(row, "Fecha limite", "fecha_limite"),
+    instructions: rowValue(row, "Instrucciones o notas de asignacion", "instrucciones"),
+    responseAt: rowValue(row, "Fecha de respuesta", "fecha_respuesta"),
+    notes: rowValue(row, "Observaciones", "observaciones"),
+    responseText: rowValue(row, "Respuesta", "respuesta"),
     createdAt: new Date().toISOString(),
   }));
-  const outgoing = sheet("Consecutivos").map((row) => ({
-    id: row.id || uid(),
-    number: Number(row.numero) || 1,
-    fullNumber: row.numero_completo || "",
-    prefix: row.prefijo || "DPDU",
-    createdAt: row.fecha || today(),
-    recipient: row.destinatario || "",
-    subject: row.asunto || "",
-    author: row.elaboro || "",
+  const outgoing = (outgoingSheet ? sheet(outgoingSheet) : []).map((row) => ({
+    id: rowValue(row, "Identificador interno", "id") || uid(),
+    number: Number(rowValue(row, "Numero consecutivo", "numero")) || 1,
+    fullNumber: rowValue(row, "Numero completo", "numero_completo"),
+    prefix: rowValue(row, "Area", "prefijo") || "DPDU",
+    createdAt: rowValue(row, "Fecha", "fecha") || today(),
+    recipient: rowValue(row, "Destinatario", "destinatario"),
+    subject: rowValue(row, "Asunto", "asunto"),
+    author: rowValue(row, "Elaboro", "elaboro"),
   }));
-  const people = sheet("Personal").map((row) => ({
-    id: row.id || uid(),
-    name: row.nombre || "",
-    role: row.cargo || "",
-    email: row.correo || "",
-    phone: row.whatsapp || "",
+  const people = (peopleSheet ? sheet(peopleSheet) : []).map((row) => ({
+    id: rowValue(row, "Identificador interno", "id") || uid(),
+    name: rowValue(row, "Nombre", "nombre"),
+    role: rowValue(row, "Cargo", "cargo"),
+    email: rowValue(row, "Correo", "correo"),
+    phone: rowValue(row, "WhatsApp", "whatsapp"),
   })).filter((person) => person.name);
-  const agenda = sheet("Agenda").map((row) => normalizeAgendaItem({
-    id: row.id || uid(),
-    title: row.titulo || "",
-    date: row.fecha || today(),
-    time: row.hora || "",
-    participants: String(row.participantes || "").split(";").map((value) => value.trim()).filter(Boolean),
-    notes: row.notas || "",
+  const agenda = (agendaSheet ? sheet(agendaSheet) : []).map((row) => normalizeAgendaItem({
+    id: rowValue(row, "Identificador interno", "id") || uid(),
+    title: rowValue(row, "Titulo", "titulo"),
+    date: rowValue(row, "Fecha", "fecha") || today(),
+    time: rowValue(row, "Hora", "hora"),
+    participants: String(rowValue(row, "Participantes", "participantes")).split(";").map((value) => value.trim()).filter(Boolean),
+    notes: rowValue(row, "Notas", "notas"),
     createdAt: new Date().toISOString(),
   })).filter((item) => item.title);
-  const config = sheet("Configuracion")[0] || {};
+  const config = configSheet ? sheet(configSheet)[0] || {} : {};
   return {
     metadata: {
       schemaVersion: schemaVersion || 1,
-      exportedAt: metadata.exported_at || "",
+      exportedAt: rowValue(metadata, "Fecha tecnica de exportacion", "exported_at"),
     },
     incoming,
     outgoing,
@@ -2576,12 +2905,12 @@ function importedFromWorkbook(workbook, XLSX) {
     agenda,
     settings: {
       id: "main",
-      nextNumber: Number(config.siguiente_numero) || state.settings.nextNumber,
-      directorEmail: config.correo_director || state.settings.directorEmail,
-      directorPhone: config.telefono_director || state.settings.directorPhone,
-      notifyEmail: config.notificar_correo ?? state.settings.notifyEmail,
-      notifyWhatsapp: config.notificar_whatsapp ?? state.settings.notifyWhatsapp,
-      notifySystem: config.notificar_sistema ?? state.settings.notifySystem,
+      nextNumber: Number(rowValue(config, "Siguiente numero", "siguiente_numero")) || state.settings.nextNumber,
+      directorEmail: rowValue(config, "Correo del director", "correo_director") || state.settings.directorEmail,
+      directorPhone: rowValue(config, "Telefono del director", "telefono_director") || state.settings.directorPhone,
+      notifyEmail: booleanValue(rowValue(config, "Notificar por correo", "notificar_correo"), state.settings.notifyEmail),
+      notifyWhatsapp: booleanValue(rowValue(config, "Notificar por WhatsApp", "notificar_whatsapp"), state.settings.notifyWhatsapp),
+      notifySystem: booleanValue(rowValue(config, "Notificar en sistema", "notificar_sistema"), state.settings.notifySystem),
       adminDeleteKey: ADMIN_DELETE_KEY,
     },
   };

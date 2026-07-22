@@ -438,13 +438,30 @@ h2 {
 
 .button:disabled,
 .icon-button:disabled {
-  cursor: wait;
-  opacity: 0.72;
+  cursor: not-allowed;
+  opacity: 0.66;
+  transform: none;
+  box-shadow: none;
+}
+
+.button.primary:disabled {
+  background: #dfe6e2;
+  border-color: #cfd9d4;
+  color: #66746e;
 }
 
 .button.is-loading,
 .icon-button.is-loading {
   gap: 9px;
+  cursor: wait;
+  opacity: 0.92;
+}
+
+.button.primary.is-loading {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  box-shadow: 0 8px 18px rgba(36, 91, 78, 0.16);
 }
 
 .button.is-loading::before,
@@ -541,6 +558,10 @@ h2 {
   grid-template-columns: repeat(4, minmax(120px, 1fr));
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.calendar-summary:empty {
+  display: none;
 }
 
 .calendar-summary span {
@@ -689,6 +710,21 @@ h2 {
 
 .agenda-detail-card {
   background: color-mix(in srgb, var(--user-color) 8%, white);
+}
+
+.agenda-detail-card.realized,
+.day-activity.realized {
+  border-left-color: #4d6b57;
+  background: #eef6f0;
+}
+
+.day-activity.realized {
+  opacity: 0.86;
+}
+
+.realized-chip {
+  background: #dceee1;
+  color: #285c39;
 }
 
 .calendar-detail-heading {
@@ -1054,6 +1090,13 @@ textarea {
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
+input[readonly] {
+  border-color: #d8e1dd;
+  background: #eef3f0;
+  color: #53615b;
+  font-weight: 800;
+}
+
 textarea {
   min-height: 92px;
   resize: vertical;
@@ -1287,6 +1330,7 @@ input[type="file"]::file-selector-button {
 .status-pill {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   min-height: 24px;
   width: fit-content;
   border-radius: 999px;
@@ -1294,6 +1338,7 @@ input[type="file"]::file-selector-button {
   font-size: 0.78rem;
   font-weight: 760;
   line-height: 1;
+  white-space: normal;
 }
 
 .meta-chip {
@@ -1341,24 +1386,41 @@ input[type="file"]::file-selector-button {
 }
 
 .status-pill.pending {
+  background: var(--danger-soft);
+  color: #8f321f;
+}
+
+.status-pill.review,
+.status-pill.assigned {
   background: var(--gold-soft);
   color: #6d4a18;
 }
 
-.status-pill.review {
-  background: #e7f0f7;
-  color: #285674;
-}
-
-.status-pill.assigned {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  box-shadow: 0 0 0 0 rgba(36, 91, 78, 0.16);
+.status-pill.delayed {
+  background: #ffe1c2;
+  color: #b33b00;
+  box-shadow: inset 0 0 0 1px rgba(179, 59, 0, 0.18);
 }
 
 .status-pill.done {
   background: #e8f5eb;
   color: #285c39;
+}
+
+.status-pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.action-hint {
+  border: 1px dashed #b9c6c0;
+  background: #eef3f0;
+  color: #45534d;
 }
 
 .record-card > span,
@@ -1411,6 +1473,11 @@ input[type="file"]::file-selector-button {
   flex-wrap: wrap;
   align-items: stretch;
   gap: 8px;
+}
+
+.card-actions .button {
+  flex: 0 1 auto;
+  min-width: 132px;
 }
 
 .link-button {
@@ -1478,6 +1545,73 @@ dialog::backdrop {
 
 .dialog-body {
   padding: 18px;
+}
+
+#outgoingEditDialog {
+  width: min(620px, calc(100vw - 28px));
+}
+
+#outgoingEditForm {
+  display: grid;
+  gap: 14px;
+}
+
+.document-preview-dialog {
+  width: min(980px, calc(100vw - 28px));
+}
+
+.preview-dialog-body {
+  display: grid;
+  gap: 14px;
+}
+
+.preview-heading {
+  align-items: start;
+}
+
+.document-preview-content {
+  max-height: min(68vh, 780px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f4f4f0;
+  padding: 18px;
+}
+
+.document-preview-content > * {
+  max-width: min(100%, 8.5in);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.document-preview-content > :first-child {
+  margin-top: 0;
+}
+
+.document-preview-content p {
+  margin-bottom: 0.8rem;
+  color: #18211d;
+  line-height: 1.5;
+}
+
+.document-preview-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  background: white;
+}
+
+.document-preview-content td,
+.document-preview-content th {
+  border: 1px solid #d7ded9;
+  padding: 7px;
+  vertical-align: top;
+}
+
+.document-preview-content img {
+  max-width: 100%;
+  height: auto;
 }
 
 .assignment-document {

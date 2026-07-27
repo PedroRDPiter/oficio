@@ -71,6 +71,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 let db;
 let apiOnline = false;
 let apiStorage = "local";
+let publicAppUrl = "";
 let supabaseOnline = false;
 let supabaseStatus = "not-configured";
 let supabase = null;
@@ -151,14 +152,17 @@ async function detectApi() {
   try {
     const response = await fetch("/api/health", { cache: "no-store" });
     apiOnline = false;
+    publicAppUrl = "";
     if (response.ok) {
       const health = await response.json();
       apiStorage = health.storage || "local";
+      publicAppUrl = /^https:\/\//i.test(health.publicUrl || "") ? health.publicUrl.replace(/\/$/, "") : "";
       apiOnline = true;
     }
   } catch {
     apiOnline = false;
     apiStorage = "local";
+    publicAppUrl = "";
   }
 }
 
@@ -267,12 +271,21 @@ function getAll(store) {
   });
 }
 
-function put(store, value) {
+async function put(store, value) {
   if (supabaseOnline) return supabasePut(store, value);
   if (apiOnline) {
+    let payload = value;
+    if (store === "incoming") {
+      const documents = await uploadIncomingDocuments(value, value.id);
+      payload = {
+        ...value,
+        documents,
+        document: documents[0] || null,
+      };
+    }
     return apiRequest(`/api/${store}/${encodeURIComponent(value.id)}`, {
       method: "PUT",
-      body: JSON.stringify(value),
+      body: JSON.stringify(payload),
     });
   }
   return new Promise((resolve, reject) => {
@@ -361,9 +374,35 @@ async function signedStorageDocument(pathValue, nameValue) {
   };
 }
 
+function incomingDocuments(item = {}) {
+  const documents = Array.isArray(item.documents) ? item.documents.filter(Boolean) : [];
+  if (documents.length) return documents;
+  return item.document ? [item.document] : [];
+}
+
+async function signedStorageDocuments(documents, legacyPath, legacyName) {
+  const storedDocuments = Array.isArray(documents) ? documents.filter(Boolean) : [];
+  if (!storedDocuments.length && legacyPath) {
+    storedDocuments.push({ path: legacyPath, name: legacyName });
+  }
+  return Promise.all(storedDocuments.map((document) => signedStorageDocument(
+    document.path || document.url,
+    document.name,
+  )));
+}
+
 async function incomingToApp(row) {
-  const person = state.people.find((item) => item.id === row.asignado_a);
-  const assignees = person ? [person.name] : [];
+  const assigneeIds = Array.isArray(row.asignados) && row.asignados.length
+    ? row.asignados
+    : row.asignado_a ? [row.asignado_a] : [];
+  const assignees = assigneeIds
+    .map((id) => state.people.find((item) => item.id === id)?.name)
+    .filter(Boolean);
+  const documents = (await signedStorageDocuments(
+    row.documentos,
+    row.documento_url,
+    row.documento_nombre,
+  )).filter(Boolean);
   return {
     id: row.id,
     folio: row.folio,
@@ -373,14 +412,15 @@ async function incomingToApp(row) {
     priority: row.prioridad || "Normal",
     status: row.estado || "Pendiente de asignacion",
     notes: row.observaciones || "",
-    document: await signedStorageDocument(row.documento_url, row.documento_nombre),
+    documents,
+    document: documents[0] || null,
     responseText: row.respuesta || "",
     responseAt: row.fecha_respuesta || "",
     responseDocument: await signedStorageDocument(row.respuesta_documento_url, row.respuesta_documento_nombre),
-    assignee: person?.name || "",
+    assignee: assignees.join(", "),
     assignees,
-    assigneeId: row.asignado_a || "",
-    assigneeIds: row.asignado_a ? [row.asignado_a] : [],
+    assigneeId: assigneeIds[0] || "",
+    assigneeIds,
     dueAt: row.fecha_limite || "",
     instructions: row.instrucciones || "",
     createdAt: row.creado_en || new Date().toISOString(),
@@ -389,10 +429,18 @@ async function incomingToApp(row) {
 
 async function incomingToDb(item) {
   const recordId = supabaseRecordId(item.id);
-  const uploadedDocument = await uploadSupabaseDocument(item.document, recordId, "recibidos");
+  const uploadedDocuments = await Promise.all(incomingDocuments(item).map((document) => (
+    uploadSupabaseDocument(document, recordId, "recibidos")
+  )));
+  const uploadedDocument = uploadedDocuments[0] || null;
   const uploadedResponseDocument = await uploadSupabaseDocument(item.responseDocument, recordId, "respuestas");
   const assigneeNames = getAssigneeNames(item);
-  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || assigneeNames.map((name) => personByName(name)?.id).find(Boolean) || null;
+  const assigneeIds = [...new Set([
+    ...(Array.isArray(item.assigneeIds) ? item.assigneeIds : []),
+    ...assigneeNames.map((name) => personByName(name)?.id),
+    item.assigneeId,
+  ].filter((id) => UUID_PATTERN.test(String(id || ""))))];
+  const assigneeId = assigneeIds[0] || null;
   return {
     id: recordId,
     folio: item.folio,
@@ -402,13 +450,20 @@ async function incomingToDb(item) {
     prioridad: item.priority,
     estado: item.status,
     observaciones: item.notes || null,
-    documento_url: uploadedDocument?.path || item.document?.path || null,
-    documento_nombre: uploadedDocument?.name || item.document?.name || null,
+    documento_url: uploadedDocument?.path || uploadedDocument?.url || null,
+    documento_nombre: uploadedDocument?.name || null,
+    documentos: uploadedDocuments.map((document) => ({
+      name: document.name,
+      path: document.path || document.url,
+      type: document.type || null,
+      size: document.size || null,
+    })),
     respuesta: item.responseText || null,
     fecha_respuesta: item.responseAt || null,
     respuesta_documento_url: uploadedResponseDocument?.path || item.responseDocument?.path || null,
     respuesta_documento_nombre: uploadedResponseDocument?.name || item.responseDocument?.name || null,
     asignado_a: supabaseOptionalUuid(assigneeId),
+    asignados: assigneeIds,
     fecha_limite: item.dueAt || null,
     instrucciones: item.instructions || null,
     creado_en: item.createdAt || new Date().toISOString(),
@@ -581,6 +636,9 @@ function safeDocumentHref(value) {
   if (!value) return "";
   try {
     const url = new URL(value, window.location.origin);
+    if (url.pathname.startsWith("/documentos/")) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
     if (["https:", "http:", "blob:"].includes(url.protocol)) return value;
     if (url.protocol === "data:" && /^data:(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|image\/(jpeg|png|webp));/i.test(value)) return value;
   } catch {
@@ -590,8 +648,8 @@ function safeDocumentHref(value) {
 }
 
 function localDocumentServerBase() {
-  if (LOCAL_DOCUMENT_SERVER_URL) return LOCAL_DOCUMENT_SERVER_URL.replace(/\/$/, "");
   if (apiOnline) return "";
+  if (LOCAL_DOCUMENT_SERVER_URL) return LOCAL_DOCUMENT_SERVER_URL.replace(/\/$/, "");
   return "";
 }
 
@@ -625,13 +683,11 @@ async function downloadOutgoingWord(item) {
 const documentPreviewState = {
   item: null,
   blob: null,
-  html: "",
 };
 
 function resetDocumentPreview() {
   documentPreviewState.item = null;
   documentPreviewState.blob = null;
-  documentPreviewState.html = "";
   const content = $("#documentPreviewContent");
   if (content) content.innerHTML = "";
 }
@@ -652,44 +708,10 @@ async function previewOutgoingWord(item) {
 
   const [mammoth, blob] = await Promise.all([loadMammoth(), outgoingWordBlob(item)]);
   const result = await mammoth.convertToHtml({ arrayBuffer: await blob.arrayBuffer() });
+  const html = result.value || "<p>Documento sin contenido para previsualizar.</p>";
   documentPreviewState.blob = blob;
-  documentPreviewState.html = result.value || "<p>Documento sin contenido para previsualizar.</p>";
   meta.textContent = `${item.createdAt || today()} - ${item.recipient || "Sin destinatario"}`;
-  content.innerHTML = documentPreviewState.html;
-}
-
-function printDocumentPreview() {
-  if (!documentPreviewState.html) return;
-  const item = documentPreviewState.item || {};
-  const printWindow = window.open("", "_blank", "noopener,noreferrer");
-  if (!printWindow) {
-    showMessage("El navegador bloqueo la ventana de impresion.", "error");
-    return;
-  }
-  printWindow.document.write(`
-    <!doctype html>
-    <html lang="es">
-      <head>
-        <meta charset="utf-8">
-        <title>${escapeHtml(item.fullNumber || "Vista previa")}</title>
-        <style>
-          body { margin: 0; background: #f4f4f0; color: #18211d; font-family: Arial, sans-serif; }
-          main { width: min(8.5in, calc(100vw - 32px)); min-height: 11in; margin: 18px auto; background: white; padding: 0.75in; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
-          p { line-height: 1.45; }
-          table { width: 100%; border-collapse: collapse; }
-          td, th { border: 1px solid #d7ded9; padding: 6px; vertical-align: top; }
-          @media print {
-            body { background: white; }
-            main { width: auto; min-height: auto; margin: 0; padding: 0; box-shadow: none; }
-          }
-        </style>
-      </head>
-      <body><main>${documentPreviewState.html}</main></body>
-    </html>
-  `);
-  printWindow.document.close();
-  printWindow.focus();
-  printWindow.print();
+  content.innerHTML = html;
 }
 
 async function uploadLocalDocument(documentRecord, ownerId, folderName) {
@@ -733,6 +755,12 @@ async function uploadSupabaseDocument(documentRecord, ownerId, folderName) {
     path,
     url: null,
   };
+}
+
+async function uploadIncomingDocuments(item, ownerId) {
+  return Promise.all(incomingDocuments(item).map((document) => (
+    uploadLocalDocument(document, ownerId, "recibidos")
+  )));
 }
 
 async function supabaseGetAll(store) {
@@ -862,6 +890,60 @@ function fileToRecord(file) {
   });
 }
 
+function filesToRecords(files) {
+  const selectedFiles = [...(files || [])];
+  selectedFiles.forEach(assertValidDocument);
+  return Promise.all(selectedFiles.map(fileToRecord));
+}
+
+let incomingDraftFiles = [];
+
+function fileIdentity(file) {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderIncomingDraftFiles() {
+  const container = $("#incomingSelectedFiles");
+  if (!container) return;
+  container.hidden = !incomingDraftFiles.length;
+  if (!incomingDraftFiles.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = `
+    <div class="selected-file-heading">
+      <strong>Archivos por adjuntar</strong>
+      <span class="meta-chip">${incomingDraftFiles.length}</span>
+    </div>
+    <ul class="selected-file-list">
+      ${incomingDraftFiles.map((file, index) => `
+        <li>
+          <span class="selected-file-index">${index + 1}</span>
+          <span class="selected-file-info">
+            <strong title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</strong>
+            <small>${escapeHtml(formatFileSize(file.size))}</small>
+          </span>
+          <button class="link-button" type="button" data-remove-incoming-draft="${index}" aria-label="Quitar ${escapeHtml(file.name)}">Quitar</button>
+        </li>
+      `).join("")}
+    </ul>
+  `;
+}
+
+function resetIncomingDraftFiles() {
+  incomingDraftFiles = [];
+  const input = $("#incomingForm")?.elements.document;
+  if (input) input.value = "";
+  renderIncomingDraftFiles();
+}
+
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -966,6 +1048,13 @@ function getAssigneeNames(item) {
   return [];
 }
 
+function automaticIncomingAssignees() {
+  const selected = ["director", "jefe"]
+    .map((position) => state.people.find((person) => normalize(person.role).split(/[^a-z0-9]+/).includes(position)))
+    .filter(Boolean);
+  return [...new Map(selected.map((person) => [person.id, person])).values()];
+}
+
 function getAgendaParticipants(item) {
   if (Array.isArray(item.participants)) return item.participants.filter(Boolean);
   return String(item.participants || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
@@ -1041,10 +1130,32 @@ function hashString(value = "") {
   return [...String(value)].reduce((hash, char) => ((hash << 5) - hash + char.charCodeAt(0)) | 0, 0);
 }
 
+const USER_COLOR_PALETTE = [
+  "#245b4e", "#2f6f9f", "#9a5a13", "#a43d32",
+  "#5b4b8a", "#007c83", "#7a4f2a", "#8b3f6f",
+  "#3f6b2a", "#375a7f", "#9b4d00", "#00695c",
+  "#6a3d9a", "#ad1457", "#1565c0", "#558b2f",
+  "#c62828", "#4527a0", "#00838f", "#b85c00",
+  "#4e342e", "#283593", "#6d6518", "#7b1fa2"
+];
+
+function calendarUserNames() {
+  const names = [
+    ...state.people.map((person) => person.name),
+    ...state.incoming.flatMap(getAssigneeNames),
+    ...state.agenda.flatMap(getAgendaParticipants)
+  ].filter(Boolean);
+
+  return [...new Map(names.map((name) => [normalize(name), name])).values()]
+    .sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }));
+}
+
 function userColor(name = "") {
-  const palette = ["#245b4e", "#3d6f92", "#946714", "#8f321f", "#455a64", "#5b4b8a", "#2f7f71", "#7a5428", "#276678", "#7b3f61"];
-  const index = Math.abs(hashString(name || "Sin asignar")) % palette.length;
-  return palette[index];
+  const value = name || "Sin asignar";
+  const normalizedValue = normalize(value);
+  const knownIndex = calendarUserNames().findIndex((knownName) => normalize(knownName) === normalizedValue);
+  const index = knownIndex >= 0 ? knownIndex : (hashString(normalizedValue) >>> 0);
+  return USER_COLOR_PALETTE[index % USER_COLOR_PALETTE.length];
 }
 
 function itemAssigneeColor(item) {
@@ -1110,6 +1221,8 @@ function normalizeIncomingItem(item) {
     : String(item.assignees || item.assignee || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
   return {
     ...item,
+    documents: incomingDocuments(item),
+    document: incomingDocuments(item)[0] || null,
     assignees,
     assignee: assignees.join(", ") || item.assignee || "",
   };
@@ -1200,17 +1313,56 @@ function renderPermissions() {
   if (importLabel) importLabel.hidden = supabaseOnline && !canMoveData;
 }
 
+const statAnimationFrames = new WeakMap();
+
+function updateAnimatedStat(selector, value) {
+  const element = $(selector);
+  if (!element) return;
+
+  const target = Number(value);
+  const current = Number(element.textContent) || 0;
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const previousFrame = statAnimationFrames.get(element);
+  if (previousFrame) cancelAnimationFrame(previousFrame);
+
+  if (!Number.isFinite(target) || current === target || reducedMotion) {
+    element.textContent = value;
+    statAnimationFrames.delete(element);
+    return;
+  }
+
+  const startedAt = performance.now();
+  const duration = 420;
+  const step = (now) => {
+    const progress = Math.min((now - startedAt) / duration, 1);
+    const eased = 1 - ((1 - progress) ** 3);
+    element.textContent = Math.round(current + ((target - current) * eased));
+
+    if (progress < 1) {
+      statAnimationFrames.set(element, requestAnimationFrame(step));
+    } else {
+      element.textContent = target;
+      statAnimationFrames.delete(element);
+    }
+  };
+
+  statAnimationFrames.set(element, requestAnimationFrame(step));
+}
+
 function renderStats() {
   const pending = state.incoming.filter((item) => !isIncomingCompleted(item)).length;
-  const assigned = state.incoming.filter((item) => getAssigneeNames(item).length).length;
+  const assigned = state.incoming.filter((item) => (
+    getAssigneeNames(item).length
+    && incomingEffectiveStatus(item) !== "Pendiente de asignacion"
+  )).length;
   const outgoingForm = $("#outgoingForm");
   const nextFullNumber = nextOutgoingFullNumber(
     outgoingForm?.elements.prefix.value,
     outgoingForm?.elements.createdAt.value
   );
-  $("#statReceived").textContent = state.incoming.length;
-  $("#statPending").textContent = pending;
-  $("#statAssigned").textContent = assigned;
+  updateAnimatedStat("#statReceived", state.incoming.length);
+  updateAnimatedStat("#statPending", pending);
+  updateAnimatedStat("#statAssigned", assigned);
   $("#statNext").textContent = nextFullNumber;
   $("#nextBadge").textContent = `Siguiente ${nextFullNumber}`;
   $("#settingsForm").elements.directorEmail.value = state.settings.directorEmail;
@@ -1232,12 +1384,6 @@ function renderStats() {
       deviceButton.textContent = "Activar en este dispositivo";
     }
   }
-}
-
-function storageModeLabel() {
-  if (supabaseOnline) return "Supabase";
-  if (apiOnline) return apiStorage === "postgresql" ? "Servidor PostgreSQL" : "Servidor local";
-  return "Este equipo";
 }
 
 function renderPeople() {
@@ -1278,7 +1424,7 @@ function renderIncoming() {
   list.innerHTML = rows.map((item) => {
     const effectiveStatus = incomingEffectiveStatus(item);
     const statusPillClass = statusClass(effectiveStatus);
-    const documentHref = safeDocumentHref(item.document?.url || item.document?.dataUrl);
+    const documents = incomingDocuments(item);
     const responseDocumentHref = safeDocumentHref(item.responseDocument?.url || item.responseDocument?.dataUrl);
     const dueText = dueSummary(item);
     const canAssign = hasRole("admin", "director");
@@ -1296,20 +1442,38 @@ function renderIncoming() {
           <div class="meta">
             <span class="meta-chip">Recibido: ${escapeHtml(item.receivedAt)}</span>
             <span class="meta-chip">Creado: ${escapeHtml((item.createdAt || "").slice(0, 10))}</span>
-            ${getAssigneeNames(item).length ? `<span class="meta-chip">Asignado a: ${escapeHtml(getAssigneeNames(item).join(", "))}</span>` : ""}
+            ${getAssigneeNames(item).length ? `<span class="meta-chip">${effectiveStatus === "Pendiente de asignacion" ? "Visible para" : "Asignado a"}: ${escapeHtml(getAssigneeNames(item).join(", "))}</span>` : ""}
             ${item.dueAt ? `<span class="meta-chip due-chip${dueClass(item)}">Limite: ${escapeHtml(item.dueAt)}${dueText ? ` · ${escapeHtml(dueText)}` : ""}</span>` : ""}
             ${item.responseAt ? `<span class="meta-chip">Respuesta: ${escapeHtml(item.responseAt)}</span>` : ""}
+            ${documents.length ? `<span class="meta-chip">${documents.length} ${documents.length === 1 ? "archivo recibido" : "archivos recibidos"}</span>` : ""}
           </div>
           ${item.notes ? `<div class="response-summary muted"><strong>Observaciones</strong><p>${escapeHtml(item.notes)}</p></div>` : ""}
           ${assignmentNote(item) ? `<div class="response-summary muted"><strong>Notas de asignacion</strong><p>${escapeHtml(assignmentNote(item))}</p></div>` : ""}
           ${item.responseText ? `<div class="response-summary"><strong>Respuesta</strong><p>${escapeHtml(item.responseText)}</p></div>` : ""}
+          ${documents.length ? `
+            <div class="incoming-documents">
+              <strong>Archivos recibidos</strong>
+              <ul>
+                ${documents.map((document, index) => {
+                  const documentHref = safeDocumentHref(document.url || document.dataUrl);
+                  return `
+                    <li>
+                      <span class="selected-file-index">${index + 1}</span>
+                      ${documentHref
+                        ? `<a href="${escapeHtml(documentHref)}" target="_blank" rel="noopener" download="${escapeHtml(document.name || "documento")}">${escapeHtml(document.name || `Documento ${index + 1}`)}</a>`
+                        : `<span>${escapeHtml(document.name || `Documento ${index + 1}`)}</span>`}
+                    </li>
+                  `;
+                }).join("")}
+              </ul>
+            </div>
+          ` : ""}
         </div>
         <div class="card-actions">
           ${canAssign ? `<button class="button primary soft-primary" type="button" data-assign="${item.id}">Asignar</button>` : ""}
           ${canRespond ? `<button class="button" type="button" data-response="${item.id}">Responder</button>` : ""}
           <button class="button ghost" type="button" data-email="${item.id}">Avisar director</button>
-          ${canUploadDocument ? `<button class="button ghost" type="button" data-upload-incoming-document="${item.id}">${item.document ? "Modificar archivo" : "Subir archivo"}</button>` : ""}
-          ${documentHref ? `<a class="button ghost" href="${escapeHtml(documentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.document.name)}">Ver escaneo</a>` : ""}
+          ${canUploadDocument ? `<button class="button ghost" type="button" data-upload-incoming-document="${item.id}">${documents.length ? "Añadir archivos" : "Subir archivos"}</button>` : ""}
           ${responseDocumentHref ? `<a class="button ghost" href="${escapeHtml(responseDocumentHref)}" target="_blank" rel="noopener" download="${escapeHtml(item.responseDocument.name)}">Ver respuesta</a>` : ""}
           ${canDelete ? `<button class="link-button" type="button" data-delete-incoming="${item.id}">Eliminar</button>` : ""}
         </div>
@@ -1393,6 +1557,10 @@ function renderOutgoing() {
 }
 
 function renderCalendar() {
+  const incomingRows = state.incoming
+    .filter((item) => item.receivedAt)
+    .slice()
+    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt));
   const pending = state.incoming
     .filter((item) => item.dueAt && !isIncomingCompleted(item))
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
@@ -1425,24 +1593,15 @@ function renderCalendar() {
   const monthEnd = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 0);
   const startOffset = month.getDay();
   const totalCells = Math.ceil((startOffset + monthEnd.getDate()) / 7) * 7;
-  const monthStart = month.toISOString().slice(0, 10);
-  const monthFinish = monthEnd.toISOString().slice(0, 10);
-  const monthPending = pending.filter((item) => item.dueAt >= monthStart && item.dueAt <= monthFinish);
-  const monthAgenda = agendaRows.filter((item) => item.date >= monthStart && item.date <= monthFinish);
   const title = $("#calendarTitle");
   if (title) {
     title.textContent = month.toLocaleDateString("es-MX", { month: "long", year: "numeric" });
   }
 
-  const summary = $("#calendarSummary");
-  if (summary) {
-    summary.innerHTML = "";
-  }
-
   const legend = $("#calendarLegend");
   if (legend) {
     const names = [...new Set([
-      ...pending.flatMap((item) => getAssigneeNames(item)),
+      ...incomingRows.flatMap((item) => getAssigneeNames(item)),
       ...agendaRows.flatMap((item) => getAgendaParticipants(item)),
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b));
     legend.innerHTML = names.length
@@ -1458,9 +1617,20 @@ function renderCalendar() {
     const inMonth = dayNumber >= 1 && dayNumber <= monthEnd.getDate();
     const cellDate = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth(), dayNumber);
     const isoDate = inMonth ? cellDate.toISOString().slice(0, 10) : "";
+    const receivedItems = inMonth ? incomingRows.filter((item) => item.receivedAt === isoDate) : [];
     const items = inMonth ? pending.filter((item) => item.dueAt === isoDate) : [];
     const agendaItems = inMonth ? agendaRows.filter((item) => item.date === isoDate) : [];
     const activities = [
+      ...receivedItems.map((item) => ({
+        type: "incoming",
+        className: " incoming-activity",
+        color: itemAssigneeColor(item),
+        label: "Ingreso",
+        title: item.folio,
+        detail: getAssigneeNames(item).join(", ") || "Sin asignar",
+        note: item.subject,
+        tooltip: `${item.folio}\nRemitente: ${item.sender}\nAsignado a: ${getAssigneeNames(item).join(", ") || "Sin asignar"}\n${item.subject}`,
+      })),
       ...items.map((item) => ({
         type: "assignment",
         className: dueClass(item),
@@ -1524,13 +1694,16 @@ function calendarDateLabel(dateValue) {
 }
 
 function activitiesForDate(dateValue) {
+  const incomingRows = state.incoming
+    .filter((item) => item.receivedAt === dateValue)
+    .sort((a, b) => a.folio.localeCompare(b.folio));
   const pending = state.incoming
     .filter((item) => item.dueAt === dateValue && !isIncomingCompleted(item))
     .sort((a, b) => a.folio.localeCompare(b.folio));
   const agendaRows = state.agenda
     .filter((item) => item.date === dateValue)
     .sort((a, b) => `${a.time || "99:99"}`.localeCompare(`${b.time || "99:99"}`));
-  return { pending, agendaRows };
+  return { incomingRows, pending, agendaRows };
 }
 
 function renderCalendarDayDetails(dateValue) {
@@ -1541,8 +1714,8 @@ function renderCalendarDayDetails(dateValue) {
   const addButton = $("#calendarAddActivityBtn");
   if (!dialog || !details || !title || !summary || !addButton) return;
 
-  const { pending, agendaRows } = activitiesForDate(dateValue);
-  const total = pending.length + agendaRows.length;
+  const { incomingRows, pending, agendaRows } = activitiesForDate(dateValue);
+  const total = incomingRows.length + pending.length + agendaRows.length;
   title.textContent = calendarDateLabel(dateValue);
   summary.textContent = total
     ? `${total} actividad${total === 1 ? "" : "es"} en este dia`
@@ -1560,6 +1733,19 @@ function renderCalendarDayDetails(dateValue) {
   }
 
   details.innerHTML = `
+    ${incomingRows.map((item) => `
+      <article class="calendar-detail-card incoming-detail-card" style="--user-color: ${itemAssigneeColor(item)}">
+        <div class="calendar-detail-heading">
+          <span class="badge">Oficio ingresado</span>
+          <strong>${escapeHtml(item.folio)}</strong>
+        </div>
+        <p>${escapeHtml(item.subject)}</p>
+        <div class="meta">
+          <span class="meta-chip">Remitente: ${escapeHtml(item.sender)}</span>
+          <span class="meta-chip">Asignado a: ${escapeHtml(getAssigneeNames(item).join(", ") || "Sin asignar")}</span>
+        </div>
+      </article>
+    `).join("")}
     ${pending.map((item) => `
       <article class="calendar-detail-card${dueClass(item)}" style="--user-color: ${itemAssigneeColor(item)}">
         <div class="calendar-detail-heading">
@@ -1606,19 +1792,26 @@ function renderEmpty(list) {
 function renderAssignmentDocument(item) {
   const container = $("#assignmentDocument");
   if (!container) return;
-  const documentUrl = item.document?.url || item.document?.dataUrl;
-  const safeHref = safeDocumentHref(documentUrl);
-  if (!safeHref) {
+  const documents = incomingDocuments(item).map((document) => ({
+    ...document,
+    safeHref: safeDocumentHref(document.url || document.dataUrl),
+  })).filter((document) => document.safeHref);
+  if (!documents.length) {
     container.innerHTML = `
       <span>Documento recibido</span>
       <p>Este oficio no tiene escaneo adjunto.</p>
     `;
     return;
   }
-  const name = item.document?.name || "Documento recibido";
   container.innerHTML = `
-    <span>Documento recibido</span>
-    <a class="button ghost" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener" download="${escapeHtml(name)}">Ver documento</a>
+    <span>${documents.length === 1 ? "Documento recibido" : "Documentos recibidos"}</span>
+    <div class="assignment-document-list">
+      ${documents.map((document, index) => `
+        <a class="button ghost" href="${escapeHtml(document.safeHref)}" target="_blank" rel="noopener" download="${escapeHtml(document.name || "documento")}">
+          ${escapeHtml(documents.length === 1 ? (document.name || "Ver documento") : `${index + 1}. ${document.name || "Documento"}`)}
+        </a>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -2107,6 +2300,10 @@ function bindAuth() {
 function bindTabs() {
   $$(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
+      if (tab.dataset.externalUrl) {
+        window.open(tab.dataset.externalUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
       $$(".tab").forEach((item) => item.classList.toggle("is-active", item === tab));
       $$(".view").forEach((view) => view.classList.toggle("is-active", view.id === `view-${tab.dataset.view}`));
       if (tab.dataset.view === "calendar") renderCalendar();
@@ -2202,6 +2399,34 @@ function bindForms() {
   });
 
   $("#incomingForm").elements.receivedAt.value = today();
+  $("#incomingForm").elements.document.addEventListener("change", (event) => {
+    const input = event.currentTarget;
+    try {
+      const selectedFiles = [...(input.files || [])];
+      selectedFiles.forEach(assertValidDocument);
+      const existingFiles = new Set(incomingDraftFiles.map(fileIdentity));
+      const newFiles = selectedFiles.filter((file) => !existingFiles.has(fileIdentity(file)));
+      incomingDraftFiles = [...incomingDraftFiles, ...newFiles];
+      renderIncomingDraftFiles();
+      if (newFiles.length < selectedFiles.length) {
+        showMessage("Los archivos que ya estaban en la lista no se agregaron de nuevo.", "info");
+      }
+    } catch (error) {
+      showMessage(`No se pudo agregar el archivo: ${describeError(error)}`, "error");
+    } finally {
+      input.value = "";
+    }
+  });
+  $("#incomingForm").addEventListener("reset", resetIncomingDraftFiles);
+  $("#incomingSelectedFiles")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-incoming-draft]");
+    if (!button) return;
+    const index = Number(button.dataset.removeIncomingDraft);
+    if (!Number.isInteger(index) || index < 0 || index >= incomingDraftFiles.length) return;
+    incomingDraftFiles.splice(index, 1);
+    renderIncomingDraftFiles();
+    $("#incomingForm").dataset.dirty = "true";
+  });
   resetOutgoingForm();
   if ($("#agendaForm")) {
     resetAgendaForm();
@@ -2231,25 +2456,35 @@ function bindForms() {
     try {
       const form = event.currentTarget;
       const data = Object.fromEntries(new FormData(form));
-      const documentFile = form.elements.document.files[0];
+      const automaticAssignees = automaticIncomingAssignees();
+      const assigneeNames = automaticAssignees.map((person) => person.name);
+      const assigneeIds = automaticAssignees.map((person) => person.id);
       const item = {
         id: uid(),
         folio: data.folio.trim(),
         receivedAt: data.receivedAt,
         sender: data.sender.trim(),
         subject: data.subject.trim(),
-        priority: data.priority,
-        status: data.status,
+        priority: "Normal",
+        status: "Pendiente de asignacion",
         notes: data.notes.trim(),
-        document: await fileToRecord(documentFile),
+        documents: await filesToRecords(incomingDraftFiles),
+        assignee: assigneeNames.join(", "),
+        assignees: assigneeNames,
+        assigneeId: assigneeIds[0] || "",
+        assigneeIds,
         createdAt: new Date().toISOString(),
       };
+      item.document = item.documents[0] || null;
       await put("incoming", item);
       form.dataset.dirty = "false";
       form.reset();
       form.elements.receivedAt.value = today();
       await refresh();
-      showMessage("Oficio guardado correctamente.", "success");
+      const assignmentMessage = automaticAssignees.length >= 2
+        ? ` Visible para ${assigneeNames.join(" y ")}, pero permanece pendiente por asignar.`
+        : " Revisa el directorio: debe existir una persona con puesto Director y otra con puesto Jefe.";
+      showMessage(`Oficio guardado y agregado al calendario.${assignmentMessage}`, automaticAssignees.length >= 2 ? "success" : "info");
       openDirectorEmail(item);
     } catch (error) {
       showMessage(`No se pudo guardar el oficio: ${describeError(error)}`, "error");
@@ -2659,14 +2894,16 @@ function bindLists() {
   $("#incomingDocumentUpload")?.addEventListener("change", async (event) => {
     const input = event.currentTarget;
     const item = state.incoming.find((row) => row.id === input.dataset.incomingId);
-    const file = input.files?.[0];
-    if (!item || !file) return;
+    const files = input.files;
+    if (!item || !files?.length) return;
     try {
       requireRole("admin", "director", "ventanilla", "responsable");
-      item.document = await fileToRecord(file);
+      const newDocuments = await filesToRecords(files);
+      item.documents = [...incomingDocuments(item), ...newDocuments];
+      item.document = item.documents[0] || null;
       await put("incoming", item);
       await refresh();
-      showMessage("Archivo del oficio actualizado correctamente.", "success");
+      showMessage(`${newDocuments.length === 1 ? "Archivo añadido" : `${newDocuments.length} archivos añadidos`} correctamente.`, "success");
     } catch (error) {
       showMessage(`No se pudo subir el archivo: ${describeError(error)}`, "error");
     } finally {
@@ -2986,6 +3223,16 @@ function bindInstallPrompt() {
     installBtn.hidden = false;
   });
   installBtn.addEventListener("click", async () => {
+    if (!window.isSecureContext) {
+      if (!publicAppUrl) await detectApi();
+      if (publicAppUrl) {
+        showMessage("Abriendo la version HTTPS para instalar la app...", "info");
+        window.location.assign(publicAppUrl);
+        return;
+      }
+      showMessage("No hay una URL HTTPS activa. Inicia scripts\\iniciar-cloud.bat y vuelve a intentarlo.", "error");
+      return;
+    }
     if (!deferredPrompt) {
       showMessage("Para instalar: en Android/Chrome usa menu > Instalar app. En iPhone/Safari usa Compartir > Agregar a pantalla de inicio.", "info");
       return;

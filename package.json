@@ -9,6 +9,7 @@
     "db:migrate": "node scripts/migrate-postgres.js",
     "local": "node src/server/server.js",
     "start": "node src/server/server.js",
+    "test": "node tests/multiple-incoming-documents.test.js",
     "check": "node --check src/server/server.js && node --check public/app.js && node --check public/sw.js"
   },
   "dependencies": {

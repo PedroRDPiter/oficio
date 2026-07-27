@@ -17,7 +17,23 @@ add column if not exists respuesta text,
 add column if not exists fecha_respuesta date,
 add column if not exists respuesta_documento_url text,
 add column if not exists respuesta_documento_nombre text,
-add column if not exists instrucciones text;
+add column if not exists documentos jsonb not null default '[]'::jsonb,
+add column if not exists instrucciones text,
+add column if not exists asignados uuid[] not null default '{}';
+
+update oficios_recibidos
+set documentos = jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+  'name', documento_nombre,
+  'path', documento_url,
+  'url', documento_url
+)))
+where jsonb_array_length(documentos) = 0
+  and documento_url is not null;
+
+update oficios_recibidos
+set asignados = array[asignado_a]
+where asignado_a is not null
+  and cardinality(asignados) = 0;
 
 alter table configuracion
 add column if not exists telefono_director text,
@@ -138,6 +154,7 @@ to authenticated
 using (
   public.mi_rol() in ('admin', 'director', 'ventanilla')
   or asignado_a = public.mi_personal_id()
+  or public.mi_personal_id() = any(asignados)
 );
 
 create policy "recibidos_insert"
@@ -152,11 +169,13 @@ using (
   public.mi_rol() in ('admin', 'director')
   or (public.mi_rol() = 'ventanilla' and asignado_a is null)
   or asignado_a = public.mi_personal_id()
+  or public.mi_personal_id() = any(asignados)
 )
 with check (
   public.mi_rol() in ('admin', 'director')
   or (public.mi_rol() = 'ventanilla' and asignado_a is null)
   or asignado_a = public.mi_personal_id()
+  or public.mi_personal_id() = any(asignados)
 );
 
 create policy "recibidos_delete"

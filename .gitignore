@@ -6,5 +6,7 @@ oficios-data.json
 documentos/
 data/oficios-data.json
 storage/documentos/
+storage/tools/
+storage/tunnel/public-url.txt
 .DS_Store
 Thumbs.db

@@ -20,6 +20,7 @@ data/                   Migraciones SQL y base JSON de respaldo
 storage/documentos/     Escaneos y PDFs subidos
 scripts/                Utilidades para Windows
   iniciar-servidor.bat
+  iniciar-cloud.bat
 ```
 
 ## Ejecutar local
@@ -80,6 +81,7 @@ En esta PC abre `http://localhost:3344/`. En otros equipos de la misma red usa l
 - `MAX_UPLOAD_BYTES`: limite de subida. Por defecto 25 MB.
 - `PUBLIC_BASE_URL`: URL desde donde otros equipos descargan documentos del servidor local.
 - `ALLOWED_ORIGIN`: origen permitido para subir documentos desde Netlify. Puede ser tu URL `https://sitio.netlify.app`.
+- `CLOUDFLARE_TUNNEL_TOKEN`: token opcional de un tunel administrado para publicar la app con una URL estable.
 - `DATABASE_URL`: conexion a PostgreSQL local, por ejemplo `postgresql://postgres:password@localhost:5432/oficios`.
 - `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`: alternativa a `DATABASE_URL`.
 
@@ -127,6 +129,42 @@ https://TU-SERVICIO.onrender.com/
 ```
 
 6. En la app, cuando pida token de API local, usa el mismo valor configurado en `API_TOKEN`.
+
+## Acceso HTTPS Desde Otras Redes Con Cloudflare
+
+En Windows ejecuta:
+
+```txt
+scripts\iniciar-cloud.bat
+```
+
+El script inicia el servidor y Cloudflare Tunnel, espera a que ambos respondan y muestra:
+
+- La URL publica HTTPS para abrir la app desde cualquier red.
+- El token de acceso que deben capturar los dispositivos autorizados.
+
+Si `cloudflared` no esta instalado, el script descarga el ejecutable oficial en `storage/tools/`.
+Sin configuracion adicional crea un Quick Tunnel temporal; su URL cambia cada vez que se reinicia y solo debe usarse para pruebas.
+Puedes comprobar la configuracion sin dejar procesos abiertos con `scripts\iniciar-cloud.bat -Check`.
+
+Para una demostracion temporal sin solicitar token, usa `scripts\iniciar-presentacion.bat`. Este modo deja la API sin autenticacion mientras el tunel este activo; no debe utilizarse para operacion diaria ni compartirse fuera de la presentacion.
+Si Cloudflare no puede generar temporalmente una URL, `scripts\iniciar-presentacion-local.bat` permite abrir la demostracion sin token desde la misma red, aunque ese acceso HTTP no permite instalar la PWA.
+
+Para una URL estable y una PWA instalada que siga funcionando despues de reiniciar:
+
+1. Crea un tunel administrado en Cloudflare y asignale un dominio HTTPS.
+2. Agrega a `.env`:
+
+```txt
+PUBLIC_BASE_URL=https://oficios.tu-dominio.mx
+ALLOWED_ORIGIN=https://oficios.tu-dominio.mx
+CLOUDFLARE_TUNNEL_TOKEN=TOKEN_DEL_TUNEL
+API_TOKEN=UN_TOKEN_LARGO_Y_PRIVADO
+```
+
+3. Ejecuta nuevamente `scripts\iniciar-cloud.bat`.
+
+Para instalarla en el dispositivo, abre la URL HTTPS y pulsa **Instalar app**. En iPhone o iPad, si el navegador no muestra el dialogo automatico, usa **Compartir > Agregar a pantalla de inicio**.
 
 Si se usara Netlify + Supabase, la app tambien puede durar mas de 48 horas, pero requiere configurar Supabase Auth, tablas, roles y storage. Esa ruta es mejor cuando se necesitan usuarios con permisos por rol.
 

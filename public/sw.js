@@ -1,4 +1,4 @@
-const CACHE_NAME = "oficios-dpdu-v43";
+const CACHE_NAME = "oficios-dpdu-v53";
 const ASSETS = [
   "/",
   "/index.html",
@@ -6,7 +6,10 @@ const ASSETS = [
   "/app.js",
   "/supabase-config.js",
   "/manifest.webmanifest",
-  "/icon.svg"
+  "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/logoDPDU.png"
 ];
 const FALLBACK_MANIFEST = {
   name: "Control de Oficios DPDU",
@@ -19,9 +22,15 @@ const FALLBACK_MANIFEST = {
   theme_color: "#164439",
   icons: [
     {
-      src: "/icon.svg",
-      sizes: "any",
-      type: "image/svg+xml",
+      src: "/icon-192.png",
+      sizes: "192x192",
+      type: "image/png",
+      purpose: "any"
+    },
+    {
+      src: "/icon-512.png",
+      sizes: "512x512",
+      type: "image/png",
       purpose: "any maskable"
     }
   ]

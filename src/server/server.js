@@ -27,6 +27,7 @@ loadEnvFile();
 const PORT = Number(process.env.PORT || 4174);
 const HOST = process.env.HOST || "0.0.0.0";
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
+const TUNNEL_PUBLIC_URL_FILE = path.join(PROJECT_ROOT, "storage", "tunnel", "public-url.txt");
 const WORD_TEMPLATE_FILES = [
   path.join(PROJECT_ROOT, "storage", "BaseOficios", "OficioMembretado.docx"),
   path.join(PROJECT_ROOT, "storage", "BaseOficios", "OficiosBase.docx"),
@@ -37,8 +38,10 @@ const DATA_FILE = path.resolve(process.env.DATA_FILE || path.join(PROJECT_ROOT, 
 const DOCUMENTS_DIR = path.resolve(process.env.DOCUMENTS_DIR || path.join(PROJECT_ROOT, "storage", "documentos"));
 const AUDIT_FILE = path.resolve(process.env.AUDIT_FILE || path.join(PROJECT_ROOT, "storage", "audit.log"));
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
-const API_TOKEN = process.env.API_TOKEN || "";
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+const configuredApiToken = process.env.API_TOKEN || "";
+const API_TOKEN = configuredApiToken.toLowerCase() === "disabled" ? "" : configuredApiToken;
+const configuredPublicBaseUrl = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+const PUBLIC_BASE_URL = configuredPublicBaseUrl.toLowerCase() === "auto" ? "" : configuredPublicBaseUrl;
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || `http://localhost:${PORT}`;
 const STORES = ["incoming", "outgoing", "people", "settings", "agenda"];
 const PRIORITIES = new Set(["Normal", "Alta", "Urgente"]);
@@ -131,6 +134,13 @@ const pgConfig = postgresConfig();
 const pgPool = pgConfig ? new Pool(pgConfig) : null;
 const ADMIN_DELETE_KEY = "dir.plan";
 
+function currentPublicUrl() {
+  if (/^https:\/\//i.test(PUBLIC_BASE_URL)) return PUBLIC_BASE_URL;
+  if (!fs.existsSync(TUNNEL_PUBLIC_URL_FILE)) return "";
+  const value = fs.readFileSync(TUNNEL_PUBLIC_URL_FILE, "utf8").trim().replace(/\/$/, "");
+  return /^https:\/\//i.test(value) ? value : "";
+}
+
 function initialData() {
   return {
     incoming: [],
@@ -166,6 +176,29 @@ function documentToApp(pathValue, nameValue) {
     path: pathValue,
     url: pathValue,
   };
+}
+
+function incomingDocuments(record = {}) {
+  const documents = Array.isArray(record.documents) ? record.documents.filter(Boolean) : [];
+  if (documents.length) return documents;
+  return record.document ? [record.document] : [];
+}
+
+function databaseDocumentsToApp(documents, legacyPath, legacyName) {
+  const storedDocuments = Array.isArray(documents) ? documents.filter(Boolean) : [];
+  if (!storedDocuments.length && legacyPath) {
+    storedDocuments.push({ path: legacyPath, name: legacyName });
+  }
+  return storedDocuments.map((document) => {
+    const pathValue = document.path || document.url;
+    return {
+      name: document.name || "documento",
+      type: document.type || undefined,
+      size: document.size || undefined,
+      path: pathValue,
+      url: pathValue,
+    };
+  }).filter((document) => document.path);
 }
 
 function dateOnly(value) {
@@ -205,8 +238,18 @@ function personToDb(person) {
 }
 
 function incomingToApp(row, people = []) {
-  const person = people.find((item) => item.id === row.asignado_a);
-  const assignees = person ? [person.name] : [];
+  const assigneeIds = Array.isArray(row.asignados) && row.asignados.length
+    ? row.asignados
+    : row.asignado_a ? [row.asignado_a] : [];
+  const assignees = assigneeIds
+    .map((id) => people.find((item) => item.id === id))
+    .filter(Boolean)
+    .map(personName);
+  const documents = databaseDocumentsToApp(
+    row.documentos,
+    row.documento_url,
+    row.documento_nombre,
+  );
   return {
     id: row.id,
     folio: row.folio,
@@ -216,14 +259,15 @@ function incomingToApp(row, people = []) {
     priority: row.prioridad || "Normal",
     status: row.estado || "Pendiente de asignacion",
     notes: row.observaciones || "",
-    document: documentToApp(row.documento_url, row.documento_nombre),
+    documents,
+    document: documents[0] || null,
     responseText: row.respuesta || "",
     responseAt: dateOnly(row.fecha_respuesta),
     responseDocument: documentToApp(row.respuesta_documento_url, row.respuesta_documento_nombre),
-    assignee: person?.name || "",
+    assignee: assignees.join(", "),
     assignees,
-    assigneeId: row.asignado_a || "",
-    assigneeIds: row.asignado_a ? [row.asignado_a] : [],
+    assigneeId: assigneeIds[0] || "",
+    assigneeIds,
     dueAt: dateOnly(row.fecha_limite),
     instructions: row.instrucciones || "",
     createdAt: dateTime(row.creado_en),
@@ -234,10 +278,19 @@ function incomingToDb(item, people = []) {
   const assigneeNames = Array.isArray(item.assignees)
     ? item.assignees
     : String(item.assignee || "").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
-  const personFromName = assigneeNames
-    .map((name) => people.find((person) => normalizeText(person.nombre) === normalizeText(name)))
-    .find(Boolean);
-  const assigneeId = item.assigneeIds?.[0] || item.assigneeId || personFromName?.id || null;
+  const assigneeIds = [...new Set([
+    ...(Array.isArray(item.assigneeIds) ? item.assigneeIds : []),
+    ...assigneeNames.map((name) => people.find((person) => normalizeText(person.nombre) === normalizeText(name))?.id),
+    item.assigneeId,
+  ].filter((id) => UUID_PATTERN.test(String(id || ""))))];
+  const assigneeId = assigneeIds[0] || null;
+  const documents = incomingDocuments(item).map((document) => ({
+    name: document.name || "documento",
+    type: document.type || null,
+    size: document.size || null,
+    path: document.path || document.url,
+  })).filter((document) => document.path);
+  const firstDocument = documents[0] || null;
   return {
     id: uuidOrNew(item.id),
     folio: item.folio,
@@ -247,13 +300,15 @@ function incomingToDb(item, people = []) {
     prioridad: item.priority || "Normal",
     estado: item.status || "Pendiente de asignacion",
     observaciones: item.notes || null,
-    documento_url: item.document?.path || item.document?.url || null,
-    documento_nombre: item.document?.name || null,
+    documento_url: firstDocument?.path || null,
+    documento_nombre: firstDocument?.name || null,
+    documentos: documents,
     respuesta: item.responseText || null,
     fecha_respuesta: item.responseAt || null,
     respuesta_documento_url: item.responseDocument?.path || item.responseDocument?.url || null,
     respuesta_documento_nombre: item.responseDocument?.name || null,
     asignado_a: optionalUuid(assigneeId),
+    asignados: assigneeIds,
     fecha_limite: item.dueAt || null,
     instrucciones: item.instructions || null,
     creado_en: item.createdAt || new Date().toISOString(),
@@ -360,6 +415,19 @@ async function ensurePostgresSchema() {
       creado_en timestamptz not null default now()
     )
   `);
+  await pgPool.query("alter table oficios_recibidos add column if not exists asignados uuid[] not null default '{}'");
+  await pgPool.query("alter table oficios_recibidos add column if not exists documentos jsonb not null default '[]'::jsonb");
+  await pgPool.query("update oficios_recibidos set asignados = array[asignado_a] where asignado_a is not null and cardinality(asignados) = 0");
+  await pgPool.query(`
+    update oficios_recibidos
+    set documentos = jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+      'name', documento_nombre,
+      'path', documento_url,
+      'url', documento_url
+    )))
+    where jsonb_array_length(documentos) = 0
+      and documento_url is not null
+  `);
 }
 
 async function readPostgresStore(store) {
@@ -442,11 +510,11 @@ async function putPostgresStore(store, value) {
     const { rows } = await pgPool.query(
       `insert into oficios_recibidos (
          id, folio, fecha_recepcion, remitente, asunto, prioridad, estado,
-         observaciones, documento_url, documento_nombre, respuesta, fecha_respuesta,
-         respuesta_documento_url, respuesta_documento_nombre, asignado_a, fecha_limite,
-         instrucciones, creado_en
+         observaciones, documento_url, documento_nombre, documentos, respuesta, fecha_respuesta,
+         respuesta_documento_url, respuesta_documento_nombre, asignado_a, asignados,
+         fecha_limite, instrucciones, creado_en
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        on conflict (id) do update set
          folio = excluded.folio,
          fecha_recepcion = excluded.fecha_recepcion,
@@ -457,11 +525,13 @@ async function putPostgresStore(store, value) {
          observaciones = excluded.observaciones,
          documento_url = excluded.documento_url,
          documento_nombre = excluded.documento_nombre,
+         documentos = excluded.documentos,
          respuesta = excluded.respuesta,
          fecha_respuesta = excluded.fecha_respuesta,
          respuesta_documento_url = excluded.respuesta_documento_url,
          respuesta_documento_nombre = excluded.respuesta_documento_nombre,
          asignado_a = excluded.asignado_a,
+         asignados = excluded.asignados,
          fecha_limite = excluded.fecha_limite,
          instrucciones = excluded.instrucciones
        returning *`,
@@ -476,11 +546,13 @@ async function putPostgresStore(store, value) {
         payload.observaciones,
         payload.documento_url,
         payload.documento_nombre,
+        JSON.stringify(payload.documentos),
         payload.respuesta,
         payload.fecha_respuesta,
         payload.respuesta_documento_url,
         payload.respuesta_documento_nombre,
         payload.asignado_a,
+        payload.asignados,
         payload.fecha_limite,
         payload.instrucciones,
         payload.creado_en,
@@ -818,13 +890,6 @@ function authorNameForItem(item, people = []) {
   return personName(author);
 }
 
-function licensedUrbanistName(name) {
-  const value = String(name || "").trim();
-  if (!value) return "";
-  if (/^lic\.\s*urb\./i.test(value)) return value;
-  return `Lic. ${value.replace(/^lic\.\s*/i, "").trim()}`;
-}
-
 function reviewerName(people = []) {
   const reviewer = people.find((person) => normalizeText(personRole(person)).includes("jefe"));
   return personName(reviewer);
@@ -897,6 +962,24 @@ function storeDocument(record) {
   };
 }
 
+function storeIncomingDocuments(record) {
+  const documents = incomingDocuments(record).map((document) => (
+    document?.dataUrl
+      ? saveDocumentFile({
+        document,
+        ownerId: record.id,
+        folderName: "recibidos",
+      })
+      : document
+  )).filter(Boolean);
+
+  return {
+    ...record,
+    documents,
+    document: documents[0] || null,
+  };
+}
+
 function storeResponseDocument(record) {
   if (!record.responseDocument?.dataUrl) return record;
   const stored = saveDocumentFile({
@@ -939,7 +1022,7 @@ function saveDocumentFile({ document, ownerId, folderName }) {
     type,
     size: document.size,
     path: publicPath,
-    url: `${PUBLIC_BASE_URL}${publicPath}`,
+    url: PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}${publicPath}` : publicPath,
   };
 }
 
@@ -1047,6 +1130,8 @@ function normalizeIncomingRecord(record) {
   if (!INCOMING_STATUSES.has(status)) throw httpError(400, "Estado no permitido");
   return {
     ...record,
+    documents: incomingDocuments(record),
+    document: incomingDocuments(record)[0] || null,
     folio: requiredText(record.folio, "folio"),
     receivedAt: requiredDate(record.receivedAt, "receivedAt"),
     sender: requiredText(record.sender, "sender"),
@@ -1186,7 +1271,12 @@ async function handleApi(req, res) {
 
   if (url.pathname === "/api/health") {
     if (pgPool) await pgPool.query("select 1");
-    send(res, 200, JSON.stringify({ ok: true, storage: pgPool ? "postgresql" : "json", authConfigured: Boolean(API_TOKEN) }));
+    send(res, 200, JSON.stringify({
+      ok: true,
+      storage: pgPool ? "postgresql" : "json",
+      authConfigured: Boolean(API_TOKEN),
+      publicUrl: currentPublicUrl(),
+    }));
     return;
   }
 
@@ -1198,7 +1288,6 @@ async function handleApi(req, res) {
   if (url.pathname === "/api/documents" && req.method === "POST") {
     const payload = await readJsonBody(req);
     const stored = saveDocumentFile(payload);
-    if (!PUBLIC_BASE_URL) stored.url = `${url.origin}${stored.path}`;
     send(res, 200, JSON.stringify(stored));
     return;
   }
@@ -1253,7 +1342,7 @@ async function handleApi(req, res) {
     let record = normalizeStoreRecord(store, await readJsonBody(req));
     record.id = id;
     if (store === "incoming") {
-      record = storeDocument(record);
+      record = storeIncomingDocuments(record);
       record = storeResponseDocument(record);
     }
     if (store === "outgoing") {

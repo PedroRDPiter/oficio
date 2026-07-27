@@ -18,11 +18,13 @@ create table oficios_recibidos (
   observaciones text,
   documento_url text,
   documento_nombre text,
+  documentos jsonb not null default '[]'::jsonb,
   respuesta text,
   fecha_respuesta date,
   respuesta_documento_url text,
   respuesta_documento_nombre text,
   asignado_a uuid references personal(id),
+  asignados uuid[] not null default '{}',
   fecha_limite date,
   instrucciones text,
   creado_en timestamptz default now()

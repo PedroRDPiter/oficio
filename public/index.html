@@ -3,10 +3,11 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#164439">
     <title>Control de Oficios</title>
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="icon.svg">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="stylesheet" href="styles.css?">
   </head>
   <body>
@@ -92,6 +93,22 @@
             </span>
             Personal
           </button>
+          <button
+            class="tab"
+            type="button"
+            data-view="directori"
+            data-external-url="http://10.1.85.9/sisdit/"
+            aria-label="Ingresar al sistema de tramites SISDIT"
+          >
+            <span class="tab-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M15 3h6v6"></path>
+                <path d="M10 14 21 3"></path>
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              </svg>
+            </span>
+            SisDit
+          </button>
         </nav>
 
         <div class="sync-note" id="syncNote">
@@ -106,6 +123,7 @@
             <h1>Recepcion y seguimiento de oficios</h1>
           </div>
           <div class="top-actions">
+            <button class="button ghost" type="button" id="installBtn">Instalar app</button>
             <button class="button ghost" type="button" id="exportBtn">Exportar Excel</button>
             <label class="button ghost file-label">
               Importar Excel
@@ -162,28 +180,12 @@
                 <textarea name="subject" rows="3" placeholder="Resumen breve del oficio" required></textarea>
               </label>
 
-              <div class="field-grid">
-                <label>
-                  Prioridad
-                  <select name="priority">
-                    <option value="Normal">Normal</option>
-                    <option value="Alta">Alta</option>
-                    <option value="Urgente">Urgente</option>
-                  </select>
-                </label>
-                <label>
-                  Estado inicial
-                  <select name="status">
-                    <option value="Pendiente de asignacion">Pendiente por asignar</option>
-                    <option value="En revision">En revision</option>
-                  </select>
-                </label>
-              </div>
-
               <label>
-                Escaneo o foto del oficio
-                <input name="document" type="file" accept="image/*,application/pdf" capture="environment">
+                Escaneos, fotos o documentos del oficio
+                <input name="document" type="file" accept=".pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple aria-describedby="incomingDocumentHelp incomingSelectedFiles">
+                <span class="subtle-text" id="incomingDocumentHelp">Selecciona uno o varios archivos; puedes volver a seleccionar para agregar más.</span>
               </label>
+              <div class="selected-file-panel" id="incomingSelectedFiles" aria-live="polite" hidden></div>
 
               <label>
                 Observaciones
@@ -209,12 +211,6 @@
                     <option>En proceso con retraso</option>
                     <option>Completado</option>
                   </select>
-                  <select id="priorityFilter" aria-label="Filtrar prioridad">
-                    <option value="">Todas las prioridades</option>
-                    <option>Normal</option>
-                    <option>Alta</option>
-                    <option>Urgente</option>
-                  </select>
                   <select id="assigneeFilter" aria-label="Filtrar responsable">
                     <option value="">Todos los responsables</option>
                   </select>
@@ -228,7 +224,7 @@
                 </div>
               </div>
               <div class="record-list" id="incomingList" aria-live="polite"></div>
-              <input id="incomingDocumentUpload" type="file" accept=".pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+              <input id="incomingDocumentUpload" type="file" accept=".pdf,.doc,.docx,image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden>
             </section>
           </div>
         </section>
@@ -237,7 +233,7 @@
           <div class="split-layout">
             <form class="panel form-panel" id="outgoingForm">
               <div class="panel-heading">
-                <h2 id="outgoingFormTitle">Generar oficio interno</h2>
+                <h2>Generar oficio interno</h2>
                 <span class="badge" id="nextBadge">Siguiente 001</span>
               </div>
 
@@ -282,7 +278,7 @@
               </label>
 
               <div class="form-actions">
-                <button class="button primary" type="submit" id="outgoingSubmitBtn">Asignar y guardar oficio</button>
+                <button class="button primary" type="submit">Asignar y guardar oficio</button>
               </div>
             </form>
 
@@ -318,7 +314,6 @@
                 <button class="button soft-primary" type="button" id="calendarToday">Hoy</button>
               </div>
             </div>
-            <div class="calendar-summary" id="calendarSummary" aria-live="polite"></div>
             <div class="calendar-legend" id="calendarLegend"></div>
             <div class="month-calendar" id="monthCalendar" aria-live="polite"></div>
           </section>
@@ -416,10 +411,10 @@
       <form method="dialog" id="assignmentForm" class="dialog-body">
         <div class="panel-heading">
           <h2>Asignar respuesta</h2>
-          <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">x</button>
+          <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">&times;</button>
         </div>
         <input type="hidden" name="id">
-        <fieldset class="assignee-picker">
+        <fieldset>
           <legend>Responsables</legend>
           <p class="field-hint">Selecciona una o varias personas que daran respuesta.</p>
           <div class="assignee-list" id="assigneeChecklist"></div>
@@ -446,7 +441,7 @@
       <form method="dialog" id="responseForm" class="dialog-body">
         <div class="panel-heading">
           <h2>Respuesta del oficio</h2>
-          <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">x</button>
+          <button class="icon-button" value="cancel" aria-label="Cerrar" type="submit">&times;</button>
         </div>
         <input type="hidden" name="id">
         <label>
@@ -474,7 +469,7 @@
             <h2 id="calendarDayTitle">Actividades del dia</h2>
             <span class="subtle-text" id="calendarDaySummary">Sin actividades registradas</span>
           </div>
-          <button class="icon-button" aria-label="Cerrar" type="button" data-close-calendar-day-dialog>x</button>
+          <button class="icon-button" aria-label="Cerrar" type="button" data-close-calendar-day-dialog>&times;</button>
         </div>
         <div class="calendar-day-details" id="calendarDayDetails"></div>
         <div class="form-actions">
@@ -488,7 +483,7 @@
       <form id="agendaForm" class="dialog-body">
         <div class="panel-heading">
           <h2>Crear registro en agenda</h2>
-          <button class="icon-button" value="cancel" aria-label="Cerrar" type="button" data-close-agenda-dialog>x</button>
+          <button class="icon-button" value="cancel" aria-label="Cerrar" type="button" data-close-agenda-dialog>&times;</button>
         </div>
         <label>
           Asunto o actividad
@@ -504,7 +499,7 @@
             <input name="time" type="time" required>
           </label>
         </div>
-        <fieldset class="assignee-picker">
+        <fieldset>
           <legend>Participantes</legend>
           <div class="assignee-list" id="agendaParticipantChecklist"></div>
         </fieldset>
@@ -526,7 +521,7 @@
             <h2 id="outgoingEditTitle">Editar oficio</h2>
             <span class="subtle-text" id="outgoingEditMeta">Consecutivo asignado</span>
           </div>
-          <button class="icon-button" aria-label="Cerrar" type="button" data-close-outgoing-edit>x</button>
+          <button class="icon-button" aria-label="Cerrar" type="button" data-close-outgoing-edit>&times;</button>
         </div>
         <input type="hidden" name="id">
         <div class="field-grid">
@@ -569,7 +564,7 @@
             <h2 id="documentPreviewTitle">Vista previa del documento</h2>
             <span class="subtle-text" id="documentPreviewMeta">Generando vista previa...</span>
           </div>
-          <button class="icon-button" aria-label="Cerrar" type="button" data-close-document-preview>x</button>
+          <button class="icon-button" aria-label="Cerrar" type="button" data-close-document-preview>&times;</button>
         </div>
         <div class="document-preview-content" id="documentPreviewContent" aria-live="polite"></div>
         <div class="form-actions">

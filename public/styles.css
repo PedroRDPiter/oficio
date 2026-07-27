@@ -3,7 +3,6 @@
   --bg: #f3f5f4;
   --surface: #ffffff;
   --surface-soft: #f8faf9;
-  --surface-tint: #edf5f1;
   --ink: #17211d;
   --muted: #64716b;
   --line: #dce4df;
@@ -257,7 +256,7 @@ nav,
   padding: 10px 12px;
   text-align: left;
   cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .tab-icon {
@@ -291,6 +290,10 @@ nav,
 .tab.is-active span,
 .tab:hover span {
   background: var(--accent-soft);
+}
+
+.tab.is-active .tab-icon {
+  animation: tabIconIn 360ms cubic-bezier(0.2, 0.82, 0.28, 1.2) backwards;
 }
 
 .sync-note {
@@ -420,7 +423,7 @@ h2 {
 
 .button:active,
 .icon-button:active {
-  transform: translateY(1px);
+  transform: translateY(1px) scale(0.98);
 }
 
 .button:active::after,
@@ -509,6 +512,102 @@ h2 {
   display: none;
 }
 
+.assignment-document-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selected-file-panel,
+.incoming-documents {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.selected-file-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.selected-file-list,
+.incoming-documents ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.selected-file-list li,
+.incoming-documents li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  border-radius: 8px;
+  background: white;
+  padding: 7px 9px;
+}
+
+.selected-file-index {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.selected-file-info {
+  min-width: 0;
+}
+
+.selected-file-info strong,
+.incoming-documents a,
+.incoming-documents li > span:nth-child(2) {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-file-info small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.incoming-documents {
+  margin-top: 12px;
+}
+
+.incoming-documents > strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.incoming-documents li {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.incoming-documents a {
+  color: var(--accent-strong);
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -553,45 +652,6 @@ h2 {
   font-size: 1.02rem;
 }
 
-.calendar-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.calendar-summary:empty {
-  display: none;
-}
-
-.calendar-summary span {
-  display: grid;
-  gap: 3px;
-  min-height: 62px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 249, 0.76));
-  padding: 10px 12px;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-weight: 780;
-}
-
-.calendar-summary strong {
-  color: var(--ink);
-  font-size: 1.35rem;
-  line-height: 1;
-}
-
-.calendar-summary .is-urgent {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
-  background: color-mix(in srgb, var(--danger) 8%, white);
-}
-
-.calendar-summary .is-urgent strong {
-  color: var(--danger);
-}
-
 .calendar-legend {
   display: flex;
   flex-wrap: wrap;
@@ -605,7 +665,8 @@ h2 {
   gap: 7px;
   min-height: 26px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--user-color) 13%, white);
+  border: 1px solid color-mix(in srgb, var(--user-color) 45%, var(--line));
+  background: color-mix(in srgb, var(--user-color) 15%, white);
   color: var(--user-color);
   padding: 0 10px;
   font-size: 0.78rem;
@@ -614,10 +675,11 @@ h2 {
 
 .legend-chip::before {
   content: "";
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 999px;
   background: var(--user-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--user-color) 22%, white);
 }
 
 .calendar-list {
@@ -631,7 +693,7 @@ h2 {
   justify-content: space-between;
   gap: 10px;
   border: 1px solid var(--line);
-  border-left: 4px solid var(--user-color, var(--accent));
+  border-left: 6px solid var(--user-color, var(--accent));
   border-radius: 8px;
   background: var(--surface-soft);
   padding: 10px 12px;
@@ -673,12 +735,12 @@ h2 {
 }
 
 .calendar-item.soon {
-  border-left-color: var(--gold);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 70%, transparent);
 }
 
 .calendar-item.urgent,
 .calendar-item.overdue {
-  border-left-color: var(--danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 70%, transparent);
 }
 
 .calendar-day-details {
@@ -693,29 +755,33 @@ h2 {
   display: grid;
   gap: 8px;
   border: 1px solid var(--line);
-  border-left: 4px solid var(--user-color, var(--accent));
+  border-left: 6px solid var(--user-color, var(--accent));
   border-radius: 8px;
   background: var(--surface-soft);
   padding: 12px;
 }
 
 .calendar-detail-card.soon {
-  border-left-color: var(--gold);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 70%, transparent);
 }
 
 .calendar-detail-card.urgent,
 .calendar-detail-card.overdue {
-  border-left-color: var(--danger);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 70%, transparent);
 }
 
 .agenda-detail-card {
   background: color-mix(in srgb, var(--user-color) 8%, white);
 }
 
+.incoming-detail-card {
+  background: color-mix(in srgb, var(--user-color) 5%, white);
+}
+
 .agenda-detail-card.realized,
 .day-activity.realized {
-  border-left-color: #4d6b57;
   background: #eef6f0;
+  box-shadow: inset 0 0 0 1px #9bb5a2;
 }
 
 .day-activity.realized {
@@ -742,10 +808,6 @@ h2 {
   color: #31403b;
   line-height: 1.42;
   overflow-wrap: anywhere;
-}
-
-.agenda-item {
-  background: color-mix(in srgb, var(--user-color) 8%, white);
 }
 
 .month-calendar {
@@ -790,7 +852,7 @@ h2 {
 
 .month-day[data-agenda-date] {
   cursor: pointer;
-  transition: background 160ms ease, box-shadow 160ms ease;
+  transition: background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .month-day[data-agenda-date]:hover,
@@ -855,12 +917,13 @@ h2 {
 .day-activity {
   display: grid;
   gap: 2px;
-  border-left: 4px solid var(--user-color);
+  border-left: 6px solid var(--user-color);
   border-radius: 6px;
   background: color-mix(in srgb, var(--user-color) 10%, white);
   padding: 6px 7px;
   min-height: 42px;
   overflow: hidden;
+  transition: box-shadow 180ms ease, transform 180ms ease, filter 180ms ease;
 }
 
 .activity-type {
@@ -882,6 +945,10 @@ h2 {
 .agenda-activity {
   border-style: solid;
   background: color-mix(in srgb, var(--user-color) 14%, white);
+}
+
+.incoming-activity {
+  background: color-mix(in srgb, var(--user-color) 6%, white);
 }
 
 .day-activity strong,
@@ -945,7 +1012,7 @@ dialog {
   padding: 15px;
   min-height: 92px;
   box-shadow: var(--shadow-sm);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
 }
 
 .stat-card::before {
@@ -997,7 +1064,7 @@ dialog {
 
 .view.is-active {
   display: block;
-  animation: viewIn 160ms ease both;
+  animation: viewIn 300ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
 }
 
 .split-layout {
@@ -1131,7 +1198,7 @@ select[multiple] option {
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .assignee-option:hover {
@@ -1288,7 +1355,7 @@ input[type="file"]::file-selector-button {
   display: grid;
   gap: 10px;
   box-shadow: var(--shadow-sm);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
 }
 
 .record-main {
@@ -1417,12 +1484,6 @@ input[type="file"]::file-selector-button {
   background: currentColor;
 }
 
-.action-hint {
-  border: 1px dashed #b9c6c0;
-  background: #eef3f0;
-  color: #45534d;
-}
-
 .record-card > span,
 .record-card p {
   overflow-wrap: anywhere;
@@ -1434,11 +1495,6 @@ input[type="file"]::file-selector-button {
   background: #edf1ef;
   color: #31403b;
   font-size: 0.76rem;
-}
-
-.pill.high {
-  background: var(--danger-soft);
-  color: #8f321f;
 }
 
 .response-summary {
@@ -1529,22 +1585,90 @@ input[type="file"]::file-selector-button {
 
 dialog {
   width: min(520px, calc(100vw - 28px));
+  overflow: hidden;
   padding: 0;
-  box-shadow: var(--shadow-lg);
+  border-color: var(--line);
+  background: var(--glass-strong);
+  box-shadow: 0 34px 90px rgba(10, 25, 21, 0.32), 0 8px 24px rgba(10, 25, 21, 0.14);
+  transform-origin: center center;
 }
 
 dialog[open] {
-  animation: dialogIn 160ms ease both;
+  animation: dialogIn 460ms cubic-bezier(0.2, 0.88, 0.25, 1) both;
 }
 
 dialog::backdrop {
-  background: rgba(13, 22, 20, 0.52);
-  backdrop-filter: blur(2px);
-  animation: backdropIn 160ms ease both;
+  background: rgba(13, 22, 20, 0.38);
+  backdrop-filter: blur(9px) saturate(0.9);
+  animation: backdropIn 320ms ease both;
+}
+
+dialog::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86), inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  background: linear-gradient(125deg, rgba(255, 255, 255, 0.2), transparent 26%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+dialog[open]::after {
+  animation: dialogLightIn 560ms 90ms ease-out both;
 }
 
 .dialog-body {
-  padding: 18px;
+  position: relative;
+  z-index: 1;
+  padding: 22px 24px;
+}
+
+.dialog-body > .panel-heading {
+  min-height: 38px;
+  padding-right: 44px;
+}
+
+dialog[open] .dialog-body > :not(.panel-heading) {
+  animation: dialogContentIn 380ms cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+
+dialog[open] .dialog-body > .panel-heading {
+  animation: dialogHeadingIn 320ms 70ms ease-out both;
+}
+
+dialog[open] .dialog-body > :nth-child(1) { animation-delay: 70ms; }
+dialog[open] .dialog-body > :nth-child(2) { animation-delay: 105ms; }
+dialog[open] .dialog-body > :nth-child(3) { animation-delay: 140ms; }
+dialog[open] .dialog-body > :nth-child(4) { animation-delay: 175ms; }
+dialog[open] .dialog-body > :nth-child(5) { animation-delay: 210ms; }
+dialog[open] .dialog-body > :nth-child(6) { animation-delay: 245ms; }
+dialog[open] .dialog-body > :nth-child(n + 7) { animation-delay: 280ms; }
+
+.dialog-body > .panel-heading > .icon-button {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  min-height: 36px;
+  border-color: rgba(143, 50, 31, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #8f321f;
+  font-size: 1.55rem;
+  font-weight: 500;
+  line-height: 1;
+  box-shadow: 0 5px 14px rgba(41, 55, 50, 0.12);
+}
+
+.dialog-body > .panel-heading > .icon-button:hover {
+  border-color: rgba(143, 50, 31, 0.48);
+  background: #fff5f2;
+  color: #702417;
+  box-shadow: 0 8px 20px rgba(112, 36, 23, 0.18);
+  transform: translateY(-1px) scale(1.06);
 }
 
 #outgoingEditDialog {
@@ -1731,6 +1855,69 @@ dialog::backdrop {
   line-height: 1.4;
 }
 
+/* Movimiento jerarquizado: revela primero la estructura y despues el contenido. */
+.sidebar {
+  animation: sidebarIn 480ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+.workspace > .topbar {
+  animation: headerIn 460ms 50ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+.stats-grid > .stat-card {
+  animation: cardReveal 420ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+.stats-grid > .stat-card:nth-child(1) { animation-delay: 90ms; }
+.stats-grid > .stat-card:nth-child(2) { animation-delay: 130ms; }
+.stats-grid > .stat-card:nth-child(3) { animation-delay: 170ms; }
+.stats-grid > .stat-card:nth-child(4) { animation-delay: 210ms; }
+
+.view.is-active .panel {
+  animation: panelReveal 380ms 70ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+.record-list > .record-card,
+.calendar-list > .calendar-item,
+.calendar-day-details > .calendar-detail-card,
+.empty-state {
+  animation: listItemIn 360ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+.record-list > :nth-child(2),
+.calendar-list > :nth-child(2),
+.calendar-day-details > :nth-child(2) { animation-delay: 35ms; }
+
+.record-list > :nth-child(3),
+.calendar-list > :nth-child(3),
+.calendar-day-details > :nth-child(3) { animation-delay: 70ms; }
+
+.record-list > :nth-child(4),
+.calendar-list > :nth-child(4),
+.calendar-day-details > :nth-child(4) { animation-delay: 105ms; }
+
+.record-list > :nth-child(n + 5),
+.calendar-list > :nth-child(n + 5),
+.calendar-day-details > :nth-child(n + 5) { animation-delay: 140ms; }
+
+.calendar-legend > .legend-chip,
+.day-activities > .day-activity {
+  animation: chipReveal 300ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+}
+
+.calendar-legend > :nth-child(2),
+.day-activities > :nth-child(2) { animation-delay: 25ms; }
+
+.calendar-legend > :nth-child(3),
+.day-activities > :nth-child(3) { animation-delay: 50ms; }
+
+.calendar-legend > :nth-child(n + 4),
+.day-activities > :nth-child(n + 4) { animation-delay: 75ms; }
+
+.notification-card {
+  animation: notificationIn 380ms cubic-bezier(0.18, 0.86, 0.26, 1.08) backwards;
+}
+
 @media (hover: hover) {
   .button:hover,
   .icon-button:hover {
@@ -1740,9 +1927,26 @@ dialog::backdrop {
 
   .stat-card:hover,
   .record-card:hover {
-    transform: translateY(-1px);
+    transform: translateY(-3px);
     border-color: #c5d2cc;
-    box-shadow: var(--shadow-md);
+    box-shadow: 0 16px 34px rgba(18, 33, 29, 0.11);
+  }
+
+  .tab:hover {
+    transform: translateX(2px);
+  }
+
+  .month-day[data-agenda-date]:hover {
+    transform: translateY(-2px);
+  }
+
+  .day-activity:hover {
+    transform: translateY(-1px);
+    filter: saturate(1.08);
+  }
+
+  .assignee-option:hover {
+    transform: translateX(2px);
   }
 
   .button.primary:hover {
@@ -1762,12 +1966,110 @@ dialog::backdrop {
 @keyframes viewIn {
   from {
     opacity: 0;
-    transform: translateY(3px);
+    transform: translateY(8px);
   }
 
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes sidebarIn {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes headerIn {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes cardReveal {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes panelReveal {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes listItemIn {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chipReveal {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes tabIconIn {
+  0% {
+    transform: scale(0.78);
+  }
+
+  65% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes notificationIn {
+  from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
   }
 }
 
@@ -1788,14 +2090,59 @@ dialog::backdrop {
 }
 
 @keyframes dialogIn {
+  0% {
+    opacity: 0;
+    transform: translateY(22px) scale(0.9);
+    filter: blur(5px);
+    box-shadow: 0 8px 22px rgba(10, 25, 21, 0.08);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.006);
+    filter: blur(0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes dialogContentIn {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.99);
+    transform: translateY(10px) scale(0.985);
   }
 
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dialogHeadingIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialogLightIn {
+  0% {
+    opacity: 0;
+  }
+
+  48% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.52;
   }
 }
 
@@ -2018,10 +2365,6 @@ dialog::backdrop {
   .calendar-controls #calendarToday {
     grid-column: 2;
     grid-row: 2;
-  }
-
-  .calendar-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .month-calendar {

@@ -2,6 +2,7 @@
   "name": "Control de Oficios DPDU",
   "short_name": "Oficios DPDU",
   "description": "Recepcion, asignacion y consecutivos de oficios para Planeacion y Desarrollo Urbano.",
+  "lang": "es-MX",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -11,9 +12,15 @@
   "theme_color": "#164439",
   "icons": [
     {
-      "src": "icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]
